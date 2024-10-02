@@ -3,9 +3,9 @@ const mysql = require("mysql2/promise");
 
 const connection = mysql.createConnection({
     host: 'localhost',
-    user: 'your_mysql_user',
-    password: 'your_mysql_password',
-    database: 'your_database_name',
+    user: 'root',
+    password: '10028mike.',
+    database: 'E-Voting System',
 });
 
 connection.connect((err) => {
