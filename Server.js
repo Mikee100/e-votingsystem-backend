@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import multer from 'multer';
+import { fileURLToPath } from 'url';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -12,10 +14,14 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
     origin: ['http://localhost:5173'], // Allow your React app
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+  
     credentials: true, // Allow credentials if needed
 }));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(express.json());
 
@@ -68,78 +74,102 @@ app.get('/departments/:schoolId', async (req, res) => {
   });
 
   app.post('/register', async (req, res) => {
-    console.log('Received request:', req.body); // Log the incoming request
-
-    const { name, email, password, gender, termsAndCondition, school, department, admissionno } = req.body;
-
-    // Validate the request body
-    if (!name || !email || !password || !gender || typeof termsAndCondition !== 'boolean' || !school || !department || !admissionno) {
-        return res.status(400).json({ message: 'All fields are required' });
+    console.log('Incoming registration request:', req.body);
+  
+    const {
+      name,
+      admissionno,
+      email,
+      password,
+      dob,
+      gender,
+      department_id,
+      school_id,
+      inSchool,
+      house_id, // Use house_id instead of house name
+      
+    } = req.body;
+  
+    // Validate input, make sure house_id is included if inSchool is "In-School"
+    if (!name || !admissionno || !email || !password || !dob || !gender || !department_id || !school_id || !inSchool || (inSchool === 'In-School' && !house_id)) {
+      console.log('Validation failed: Missing required fields');
+      return res.status(400).json({ message: 'All fields are required' });
     }
-
+  
     try {
-        // Check if the user already exists
-        const [results] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
-
-        if (results.length > 0) {
-            return res.status(400).json({ message: 'User already exists' });
-        }
-
-        // Prepare new user data
-        const newUser = { 
-            name, 
-            email, 
-            password,  // Use plain password, consider hashing it before storage
-            gender, 
-            terms_and_condition: termsAndCondition,
-            school,
-            department,
-            admissionno
-        };
-
-        // Insert the new user into the database
-        await db.query('INSERT INTO users SET ?', newUser);
-
-        res.status(201).json({ message: 'User registered successfully' });
+      // Existing user check and other logic here...
+  
+      // Insert the new user into the database
+      console.log('Inserting new user into the database');
+      const result = await db.query(
+        'INSERT INTO users (name, admissionno, email, password, dob, gender, department, school, inSchool, hostel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          name,
+          admissionno,
+          email,
+          password,
+          dob,
+          gender,
+          department_id,
+          school_id,
+          inSchool,
+          house_id || null, // Store NULL if no house is provided
+        ]
+      );
+  
+      // Fetch the newly inserted user using the last insert ID
+      const newUserId = result[0].insertId;
+      console.log('New user inserted with ID:', newUserId);
+  
+      const [newUser] = await db.query('SELECT * FROM users WHERE id = ?', [newUserId]);
+      const { password: _, ...userData } = newUser[0];
+  
+      console.log('User registered successfully:', userData);
+      return res.status(201).json({ message: 'User registered successfully', user: userData });
     } catch (error) {
-        console.error('Unexpected error:', error); // Log error
-        res.status(500).json({ message: 'Server error' });
-    }
-});
-
-
-
-
-app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  try {
-      // Fetch the user with the provided email
-      const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
-
-      // Check if user exists
-      if (user.length === 0) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-      }
-
-      const existingUser = user[0];
-
-      // Compare the provided password with the stored password (both should be plain text)
-      if (existingUser.password !== password) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-      }
-
-      // Create a JWT token with a secret key
-      const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, 'your_jwt_secret', { expiresIn: '1h' });
-
-      // Send the token back to the client
-      return res.status(200).json({ message: 'Login successful', token });
-
-  } catch (error) {
-      console.error(error);
+      console.error('Error during registration:', error);
       return res.status(500).json({ message: 'Server error' });
-  }
-});
+    }
+  });
+  
+  
+  
+
+
+
+
+
+  app.post('/login', async (req, res) => {
+    const { email, password } = req.body;
+  
+    try {
+        // Fetch the user with the provided email
+        const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
+  
+        // Check if user exists
+        if (user.length === 0) {
+            return res.status(401).json({ message: 'Invalid email or password' });
+        }
+  
+        const existingUser = user[0];
+  
+        // Compare the provided password with the stored hashed password
+        const passwordMatch = await bcrypt.compare(password, existingUser.password);
+        if (!passwordMatch) {
+            return res.status(401).json({ message: 'Invalid email or password' });
+        }
+  
+        // Create a JWT token with a secret key
+        const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, 'your_jwt_secret', { expiresIn: '1h' });
+  
+        // Send the token back to the client
+        return res.status(200).json({ message: 'Login successful', token });
+  
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: 'Server error' });
+    }
+  });
   
 
 // Fetch roles from the database
@@ -159,9 +189,6 @@ app.get('/roles', async (req, res) => {
 app.get('/api/houses', async (req, res) => {
   try {
     const { gender } = req.query;
-
-    // Modify the SQL or database query based on your requirements and database
-    // Assuming you have a table named 'houses' with columns 'name' and 'gender'
     let query = 'SELECT * FROM houses';
     const params = [];
 
@@ -184,6 +211,8 @@ app.get('/api/houses', async (req, res) => {
     });
   }
 });
+
+
 
 // Set up storage for file uploads using multer
 const storage = multer.diskStorage({
@@ -208,46 +237,151 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
     gender,
     motto,
     hostel,
-    inSchool
+    inSchool // Expecting this to be either 'In-School', 'Out-School', or null
   } = req.body;
   const photoPath = req.file ? req.file.path : null;
 
-  const sql = `
-  INSERT INTO candidates (
-    name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`;
+  let inSchoolValue = null; // Initialize inSchoolValue
 
-db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchool, photoPath], (error, results) => {
-  if (error) {
-    console.error('Error inserting candidate:', error);
-    res.status(500).send('Error inserting candidate');
-    return;
+  // Set inSchoolValue based on the selected role
+  if (role === "House Rep") {
+    // Make sure inSchool is one of the valid ENUM values or null
+    inSchoolValue = inSchool === 'In-School' || inSchool === 'Out-School' ? inSchool : null;
+  } else {
+    // For other roles, inSchool should be null
+    inSchoolValue = null;
   }
-  res.status(201).send('Candidate registered successfully');
-});
-});
 
-// Endpoint to get user profile details
-app.get('/user-profile', (req, res) => {
-  const userId = req.query.userId;
+  const sql = `
+    INSERT INTO candidates (
+      name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
 
-  // Include photo_path in the SELECT statement
-  const sql = 'SELECT name, photo_path FROM candidates WHERE id = ?';
-  db.query(sql, [userId], (error, results) => {
+  db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath], (error, results) => {
     if (error) {
-      console.error('Error fetching user profile:', error);
-      return res.status(500).send('Error fetching user profile');
+      console.error('Error inserting candidate:', error);
+      res.status(500).send('Error inserting candidate');
+      return;
     }
-
-    if (results.length > 0) {
-      res.json(results[0]);
-    } else {
-      res.status(404).send('User not found');
-    }
+    res.status(201).send('Candidate registered successfully');
   });
 });
 
+
+// Endpoint to get user profile details
+// Add this route to your server file
+app.get('/userprofile', async (req, res) => {
+  const email = req.query.email; // Get email from query parameter
+
+  try {
+    const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
+
+    // Check if user exists
+    if (user.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const existingUser = user[0];
+    
+    // Exclude password or any sensitive data from response
+    delete existingUser.password; // Optional: do not send the password
+
+    return res.status(200).json({ user: existingUser });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+// Assuming you have a database connection established with `db`
+// Function to get leaders by school
+const getCandidatesBySchool = async (schoolId) => {
+  try {
+    const [candidates] = await db.execute(`
+      SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
+      FROM candidates c
+      INNER JOIN schools s ON c.school_id = s.idschools
+      WHERE s.idschools = ?
+    `, [schoolId]);
+
+    return candidates;
+  } catch (error) {
+    console.error('Error fetching candidates by school:', error);
+    throw error; // Re-throw error to be caught by the route handler
+  }
+};
+
+
+
+app.get('/candidates', async (req, res) => {
+  const { schoolId } = req.query; // Use school ID passed in query params
+  try {
+    const candidates = await getCandidatesBySchool(schoolId);
+    
+    if (candidates.length === 0) {
+      return res.json({ message: "No candidates available for your school." });
+    }
+
+    res.json({ candidates });
+  } catch (error) {
+    console.error('Error fetching candidates:', error);
+    res.status(500).json({ error: 'Failed to fetch candidates' });
+  }
+});
+
+
+app.post('/vote', async (req, res) => {
+  const { userId, candidateId } = req.body;
+
+  try {
+      // Check if the user has already voted
+      const [existingVote] = await db.execute('SELECT * FROM votes WHERE user_id = ?', [userId]);
+      if (existingVote.length > 0) {
+          return res.status(400).json({ message: 'User has already voted' });
+      }
+
+      // Insert the new vote
+      await db.execute('INSERT INTO votes (user_id, candidate_id) VALUES (?, ?)', [userId, candidateId]);
+      return res.status(201).json({ message: 'Vote cast successfully' });
+  } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: 'Server error' });
+  }
+});
+// Assuming you have express and a database setup
+app.get('/leaders', async (req, res) => {
+  const { school } = req.query; // Get school from query parameters
+  try {
+    const leaders = await getLeadersBySchool(school); // Fetch leaders from the database
+    res.json({ leaders });
+  } catch (error) {
+    console.error('Error fetching leaders:', error);
+    res.status(500).json({ error: 'Failed to fetch leaders' });
+  }
+});
+
+
+
+
+app.post('/vote', async (req, res) => {
+  const { userId, candidateId } = req.body;
+
+  try {
+    // Check if the user has already voted
+    const [existingVote] = await db.execute('SELECT * FROM votes WHERE user_id = ?', [userId]);
+    if (existingVote.length > 0) {
+      return res.status(400).json({ message: 'User has already voted' });
+    }
+
+    // Insert the new vote
+    await db.execute('INSERT INTO votes (user_id, candidate_id) VALUES (?, ?)', [userId, candidateId]);
+    return res.status(201).json({ message: 'Vote cast successfully' });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
 
 
 
