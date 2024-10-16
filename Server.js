@@ -7,8 +7,14 @@ import path from 'path';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 
+import nodemailer from 'nodemailer';
+import crypto from 'crypto';
+
+const JWT_SECRET='waweru';
+const  secret_key='waweru'
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 
 // Enable CORS for all routes
 app.use(cors({
@@ -73,6 +79,18 @@ app.get('/departments/:schoolId', async (req, res) => {
     }
   });
 
+
+
+
+  // Configure Nodemailer transporter (use your email provider's SMTP settings)
+  const transporter = nodemailer.createTransport({
+    service: 'Gmail', // For example, use 'Gmail' or your preferred email service
+    auth: {
+      user: 'mikekariuki10028@gmail.com', // Replace with your email
+      pass: 'qvfk dcie sjop hcxb', // Replace with your email password or app-specific password
+    },
+  });
+
   app.post('/register', async (req, res) => {
     console.log('Incoming registration request:', req.body);
   
@@ -86,91 +104,186 @@ app.get('/departments/:schoolId', async (req, res) => {
       department_id,
       school_id,
       inSchool,
-      house_id, // Use house_id instead of house name
-      
+      house_id,
     } = req.body;
   
-    // Validate input, make sure house_id is included if inSchool is "In-School"
-    if (!name || !admissionno || !email || !password || !dob || !gender || !department_id || !school_id || !inSchool || (inSchool === 'In-School' && !house_id)) {
+    if (
+      !name ||
+      !admissionno ||
+      !email ||
+      !password ||
+      !dob ||
+      !gender ||
+      !department_id ||
+      !school_id ||
+      !inSchool ||
+      (inSchool === 'In-School' && !house_id)
+    ) {
       console.log('Validation failed: Missing required fields');
       return res.status(400).json({ message: 'All fields are required' });
     }
   
     try {
-      // Existing user check and other logic here...
+      // Hash the password before storing it
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+  
+      // Generate a verification token using crypto
+      const verificationToken = crypto.randomBytes(32).toString('hex');
   
       // Insert the new user into the database
       console.log('Inserting new user into the database');
       const result = await db.query(
-        'INSERT INTO users (name, admissionno, email, password, dob, gender, department, school, inSchool, hostel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, admissionno, email, password, dob, gender, department, school, inSchool, hostel, verificationToken, isVerified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name,
           admissionno,
           email,
-          password,
+          hashedPassword,
           dob,
           gender,
           department_id,
           school_id,
           inSchool,
-          house_id || null, // Store NULL if no house is provided
+          house_id || null,
+          verificationToken,
+          false, // Set isVerified to false initially
         ]
       );
   
-      // Fetch the newly inserted user using the last insert ID
       const newUserId = result[0].insertId;
       console.log('New user inserted with ID:', newUserId);
+      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' }); // Token valid for 1 hour
+
+      // Send verification email
+    const verificationUrl = `http://localhost:5173/verify?token=${encodeURIComponent(token)}`;
+ // Replace with your frontend URL
+      const mailOptions = {
+        from: 'mikekariuki10028@gmail.com',
+        to: email,
+        subject: 'Verify Your Email',
+        html: `<p>Thank you for registering! Please verify your email by clicking the link below:</p>
+               <a href="${verificationUrl}">Verify Email</a>`,
+      };
   
-      const [newUser] = await db.query('SELECT * FROM users WHERE id = ?', [newUserId]);
-      const { password: _, ...userData } = newUser[0];
+      await transporter.sendMail(mailOptions);
   
-      console.log('User registered successfully:', userData);
-      return res.status(201).json({ message: 'User registered successfully', user: userData });
+      console.log('Verification email sent to:', email);
+      return res.status(201).json({ message: 'User registered successfully. Please check your email for verification.' });
     } catch (error) {
       console.error('Error during registration:', error);
       return res.status(500).json({ message: 'Server error' });
     }
   });
-  
-  
-  
 
+  app.get('/verify', async (req, res) => {
+  const { token } = req.query;
+  if (!token) {
+    return res.status(400).send('Verification token is missing.');
+  }
 
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) {
+      return res.status(400).send('Invalid or expired verification token.');
+    }
 
+    const userEmail = decoded.email;
 
-
-  app.post('/login', async (req, res) => {
-    const { email, password } = req.body;
-  
     try {
-        // Fetch the user with the provided email
-        const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
-  
-        // Check if user exists
-        if (user.length === 0) {
-            return res.status(401).json({ message: 'Invalid email or password' });
-        }
-  
-        const existingUser = user[0];
-  
-        // Compare the provided password with the stored hashed password
-        const passwordMatch = await bcrypt.compare(password, existingUser.password);
-        if (!passwordMatch) {
-            return res.status(401).json({ message: 'Invalid email or password' });
-        }
-  
-        // Create a JWT token with a secret key
-        const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, 'your_jwt_secret', { expiresIn: '1h' });
-  
-        // Send the token back to the client
-        return res.status(200).json({ message: 'Login successful', token });
-  
+      const result = await db.query(
+        'UPDATE users SET isVerified = 1 WHERE email = ?',
+        [userEmail]
+      );
+
+      if (result[0].affectedRows === 0) {
+        return res.status(404).send('User not found.');
+      }
+
+      res.send('Email successfully verified! You can now log in.');
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Server error' });
+      console.error('Verification error:', error);
+      res.status(500).send('Server error.');
     }
   });
-  
+});
+
+
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+      // Fetch user from the database
+      const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
+      if (user.length === 0) {
+          return res.status(401).json({ message: 'Invalid email or password' });
+      }
+
+      const existingUser = user[0];
+      // Check if user is verified
+      if (!existingUser.isVerified) {
+          return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
+      }
+
+      // Compare password
+      const passwordMatch = await bcrypt.compare(password, existingUser.password);
+      if (!passwordMatch) {
+          return res.status(401).json({ message: 'Invalid email or password' });
+      }
+
+      // Create JWT token
+      const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, JWT_SECRET, { expiresIn: '1h' });
+
+      // Log the token
+      console.log('Generated JWT Token:', token); // Log the token here
+
+      // Send token back to the client
+      return res.status(200).json({ message: 'Login successful', token });
+  } catch (error) {
+      console.error('Error during login:', error.message);
+      return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+const authenticateToken = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1];
+
+  if (!token) return res.sendStatus(403); // No token provided
+
+  console.log("Verifying token:", token); // Log the token being verified
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) {
+          console.error("Token verification failed:", err.message);
+          return res.sendStatus(403); // Invalid token
+      }
+      req.user = user;
+      next(); // Proceed to the next middleware or route handler
+  });
+};
+
+
+app.get('/api/user', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const [user] = await db.execute('SELECT name, email FROM users WHERE id = ?', [userId]);
+
+        if (user.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const userData = user[0];
+        return res.status(200).json({
+            name: userData.name,
+            email: userData.email,
+        });
+    } catch (error) {
+        console.error('Error fetching user data:', error.message);
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Start your server
+
 
 // Fetch roles from the database
 app.get('/roles', async (req, res) => {
