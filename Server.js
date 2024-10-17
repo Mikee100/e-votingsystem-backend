@@ -233,9 +233,7 @@ app.post('/login', async (req, res) => {
       // Create JWT token
       const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, JWT_SECRET, { expiresIn: '1h' });
 
-      // Log the token
-      console.log('Generated JWT Token:', token); // Log the token here
-
+     
       // Send token back to the client
       return res.status(200).json({ message: 'Login successful', token });
   } catch (error) {
@@ -244,12 +242,20 @@ app.post('/login', async (req, res) => {
   }
 });
 
+// Logout route
+app.post('/logout', (req, res) => {
+  // Since we're using token-based authentication, "logging out" usually means
+  // the client deletes the token from storage.
+  // If you're storing sessions server-side, you can handle session destruction here.
+  res.status(200).json({ message: 'Logout successful' });
+});
+
 const authenticateToken = (req, res, next) => {
   const token = req.headers['authorization']?.split(' ')[1];
 
   if (!token) return res.sendStatus(403); // No token provided
 
-  console.log("Verifying token:", token); // Log the token being verified
+
   jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) {
           console.error("Token verification failed:", err.message);
