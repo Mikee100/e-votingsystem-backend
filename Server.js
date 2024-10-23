@@ -56,13 +56,17 @@ app.get('/schools', async (req, res) => {
     }
 
     const [schools] = await db.query('SELECT idschools, schoolname FROM schools');
+ 
+    if (schools.length === 0) {
+      return res.status(404).json({ message: 'No schools found' });
+    }
+    
     res.json(schools);
   } catch (error) {
     console.error('Error fetching schools:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
-
 app.get('/departments/:schoolId', async (req, res) => {
     const { schoolId } = req.params;
   
@@ -432,12 +436,17 @@ const getCandidatesBySchool = async (schoolId) => {
 };
 
 
-
 app.get('/candidates', async (req, res) => {
-  const { schoolId } = req.query; // Use school ID passed in query params
+  const { schoolId } = req.query;
+
+  // Check if schoolId is provided
+  if (!schoolId) {
+    return res.status(400).json({ error: 'Missing schoolId parameter' });
+  }
+
   try {
     const candidates = await getCandidatesBySchool(schoolId);
-    
+
     if (candidates.length === 0) {
       return res.json({ message: "No candidates available for your school." });
     }
@@ -448,6 +457,23 @@ app.get('/candidates', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch candidates' });
   }
 });
+
+app.get('/api/candidates/school/:schoolId', async (req, res) => {
+  const { schoolId } = req.params;
+
+  try {
+    const candidates = await getCandidatesBySchool(schoolId);
+    if (candidates.length === 0) {
+      return res.status(404).json({ message: "No candidates available for this school." });
+    }
+    res.json({ candidates });
+  } catch (error) {
+    console.error('Error fetching candidates by school:', error);
+    res.status(500).json({ error: 'Failed to fetch candidates' });
+  }
+});
+
+
 
 
 app.post('/vote', async (req, res) => {
@@ -483,26 +509,109 @@ app.get('/leaders', async (req, res) => {
 
 
 
+
 app.post('/vote', async (req, res) => {
-  const { userId, candidateId } = req.body;
+  const { email, leaderId, role } = req.body;
 
   try {
     // Check if the user has already voted
-    const [existingVote] = await db.execute('SELECT * FROM votes WHERE user_id = ?', [userId]);
+    const existingVote = await db.query('SELECT * FROM votes WHERE voter_email = ? AND candidate_id = ?', [email, leaderId]);
     if (existingVote.length > 0) {
-      return res.status(400).json({ message: 'User has already voted' });
+      return res.status(400).json({ success: false, message: 'You have already voted for this candidate.' });
     }
 
-    // Insert the new vote
-    await db.execute('INSERT INTO votes (user_id, candidate_id) VALUES (?, ?)', [userId, candidateId]);
-    return res.status(201).json({ message: 'Vote cast successfully' });
+    // Insert the vote
+    await db.query('INSERT INTO votes (candidate_id, voter_email, role) VALUES (?, ?, ?)', [leaderId, email, role]);
+    res.json({ success: true });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Server error' });
+    console.error('Error casting vote:', error);
+    res.status(500).json({ success: false, message: 'Error casting vote.' });
+  }
+});
+
+app.get('/votes/tally', async (req, res) => {
+  try {
+    const tally = {
+      hostelReps: [],
+      delegates: [],
+      congressPersons: []
+    };
+
+    // Tally votes for Hostel Reps
+    const hostelReps = await db.query('SELECT candidate_id, COUNT(*) AS votes FROM votes WHERE role = "Hostel Rep" GROUP BY candidate_id');
+    tally.hostelReps = hostelReps;
+
+    // Tally votes for Delegates
+    const delegates = await db.query('SELECT candidate_id, COUNT(*) AS votes FROM votes WHERE role = "Delegate" GROUP BY candidate_id');
+    tally.delegates = delegates;
+
+    // Tally votes for Congress Persons
+    const congressPersons = await db.query('SELECT candidate_id, COUNT(*) AS votes FROM votes WHERE role = "Congress Person" GROUP BY candidate_id');
+    tally.congressPersons = congressPersons;
+
+    res.json(tally);
+  } catch (error) {
+    console.error('Error fetching vote tally:', error);
+    res.status(500).json({ message: 'Error fetching vote tally.' });
   }
 });
 
 
+app.post('/vote/delegate', async (req, res) => {
+  const { email, leaderId, schoolId } = req.body;
+
+  try {
+      await db.query(
+          'INSERT INTO delegates_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
+          [email, leaderId, schoolId]
+      );
+      res.json({ success: true });
+  } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+          res.status(400).json({ message: 'You have already voted for this delegate.' });
+      } else {
+          res.status(500).json({ message: 'Failed to cast vote.' });
+      }
+  }
+});
+
+// Route for voting for congresspersons
+app.post('/vote/congressperson', async (req, res) => {
+  const { email, leaderId, schoolId } = req.body;
+
+  try {
+      await db.query(
+          'INSERT INTO congressperson_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
+          [email, leaderId, schoolId]
+      );
+      res.json({ success: true });
+  } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+          res.status(400).json({ message: 'You have already voted for this congressperson.' });
+      } else {
+          res.status(500).json({ message: 'Failed to cast vote.' });
+      }
+  }
+});
+
+// Route for voting for hostel representatives
+app.post('/vote/hostelrep', async (req, res) => {
+  const { email, leaderId, schoolId } = req.body;
+
+  try {
+      await db.query(
+          'INSERT INTO hostelrep_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
+          [email, leaderId, schoolId]
+      );
+      res.json({ success: true });
+  } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+          res.status(400).json({ message: 'You have already voted for this hostel representative.' });
+      } else {
+          res.status(500).json({ message: 'Failed to cast vote.' });
+      }
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
