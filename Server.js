@@ -612,6 +612,45 @@ app.post('/vote/hostelrep', async (req, res) => {
       }
   }
 });
+// Assume you have a table 'votes' where each vote is stored with a candidate ID
+app.get('/api/admin/vote-stats', async (req, res) => {
+  try {
+    // Queries to get the vote count per leader for each role
+    const congresspersonVotes = `
+      SELECT leader_id, COUNT(*) AS voteCount
+      FROM congressperson_votes
+      GROUP BY leader_id
+    `;
+    const delegateVotes = `
+      SELECT leader_id, COUNT(*) AS voteCount
+      FROM delegates_votes
+      GROUP BY leader_id
+    `;
+    const hostelRepVotes = `
+      SELECT leader_id, COUNT(*) AS voteCount
+      FROM hostelrep_votes
+      GROUP BY leader_id
+    `;
+
+    // Execute the queries
+    const [congressResults] = await db.query(congresspersonVotes);
+    const [delegateResults] = await db.query(delegateVotes);
+    const [hostelRepResults] = await db.query(hostelRepVotes);
+
+    // Format the response with separate objects for each role
+    const voteStats = {
+      congressperson: congressResults,
+      delegate: delegateResults,
+      hostelRep: hostelRepResults,
+    };
+
+    res.json(voteStats);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch vote stats' });
+  }
+});
+
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
