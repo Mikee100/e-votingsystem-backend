@@ -86,12 +86,12 @@ app.get('/departments/:schoolId', async (req, res) => {
 
 
 
-  // Configure Nodemailer transporter (use your email provider's SMTP settings)
+
   const transporter = nodemailer.createTransport({
-    service: 'Gmail', // For example, use 'Gmail' or your preferred email service
+    service: 'Gmail',
     auth: {
-      user: 'mikekariuki10028@gmail.com', // Replace with your email
-      pass: 'qvfk dcie sjop hcxb', // Replace with your email password or app-specific password
+      user: 'mikekariuki10028@gmail.com',
+      pass: 'qvfk dcie sjop hcxb',
     },
   });
 
@@ -128,15 +128,15 @@ app.get('/departments/:schoolId', async (req, res) => {
     }
   
     try {
-      // Hash the password before storing it
+  
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
   
-      // Generate a verification token using crypto
+      
       const verificationToken = crypto.randomBytes(32).toString('hex');
   
-      // Insert the new user into the database
-      console.log('Inserting new user into the database');
+      
+    
       const result = await db.query(
         'INSERT INTO users (name, admissionno, email, password, dob, gender, department, school, inSchool, hostel, verificationToken, isVerified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
@@ -151,7 +151,7 @@ app.get('/departments/:schoolId', async (req, res) => {
           inSchool,
           house_id || null,
           verificationToken,
-          false, // Set isVerified to false initially
+          false, 
         ]
       );
   
@@ -159,9 +159,9 @@ app.get('/departments/:schoolId', async (req, res) => {
       console.log('New user inserted with ID:', newUserId);
       const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' }); // Token valid for 1 hour
 
-      // Send verification email
+   
     const verificationUrl = `http://localhost:5173/verify?token=${encodeURIComponent(token)}`;
- // Replace with your frontend URL
+ 
       const mailOptions = {
         from: 'mikekariuki10028@gmail.com',
         to: email,
@@ -246,11 +246,9 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Logout route
+
 app.post('/logout', (req, res) => {
-  // Since we're using token-based authentication, "logging out" usually means
-  // the client deletes the token from storage.
-  // If you're storing sessions server-side, you can handle session destruction here.
+
   res.status(200).json({ message: 'Logout successful' });
 });
 
@@ -292,10 +290,7 @@ app.get('/api/user', authenticateToken, async (req, res) => {
     }
 });
 
-// Start your server
 
-
-// Fetch roles from the database
 app.get('/roles', async (req, res) => {
     try {
       const [roles] = await db.execute('SELECT * FROM roles');
@@ -308,7 +303,6 @@ app.get('/roles', async (req, res) => {
   
 
 
-// GET route to fetch houses
 app.get('/api/houses', async (req, res) => {
   try {
     const { gender } = req.query;
@@ -337,19 +331,19 @@ app.get('/api/houses', async (req, res) => {
 
 
 
-// Set up storage for file uploads using multer
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/'); // Store files in an "uploads" folder
+    cb(null, 'uploads/'); 
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname)); // Generate unique filename
+    cb(null, Date.now() + path.extname(file.originalname)); 
   }
 });
 
 const upload = multer({ storage });
 
-// Handle candidate registration
+
 app.post('/candidate-register', upload.single('photo'), (req, res) => {
   const {
     name,
@@ -360,18 +354,18 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
     gender,
     motto,
     hostel,
-    inSchool // Expecting this to be either 'In-School', 'Out-School', or null
+    inSchool 
   } = req.body;
   const photoPath = req.file ? req.file.path : null;
 
-  let inSchoolValue = null; // Initialize inSchoolValue
+  let inSchoolValue = null; 
 
-  // Set inSchoolValue based on the selected role
+
   if (role === "House Rep") {
-    // Make sure inSchool is one of the valid ENUM values or null
+    
     inSchoolValue = inSchool === 'In-School' || inSchool === 'Out-School' ? inSchool : null;
   } else {
-    // For other roles, inSchool should be null
+    
     inSchoolValue = null;
   }
 
@@ -392,8 +386,7 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
 });
 
 
-// Endpoint to get user profile details
-// Add this route to your server file
+
 app.get('/userprofile', async (req, res) => {
   const email = req.query.email; // Get email from query parameter
 
@@ -417,8 +410,7 @@ app.get('/userprofile', async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 });
-// Assuming you have a database connection established with `db`
-// Function to get leaders by school
+
 const getCandidatesBySchool = async (schoolId) => {
   try {
     const [candidates] = await db.execute(`
@@ -494,11 +486,11 @@ app.post('/vote', async (req, res) => {
       return res.status(500).json({ message: 'Server error' });
   }
 });
-// Assuming you have express and a database setup
+
 app.get('/leaders', async (req, res) => {
-  const { school } = req.query; // Get school from query parameters
+  const { school } = req.query; 
   try {
-    const leaders = await getLeadersBySchool(school); // Fetch leaders from the database
+    const leaders = await getLeadersBySchool(school);
     res.json({ leaders });
   } catch (error) {
     console.error('Error fetching leaders:', error);
@@ -557,91 +549,95 @@ app.get('/votes/tally', async (req, res) => {
 });
 
 
+
 app.post('/vote/delegate', async (req, res) => {
-  const { email, leaderId, schoolId } = req.body;
+  const { leaderId, schoolId } = req.body;
 
   try {
-      await db.query(
-          'INSERT INTO delegates_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
-          [email, leaderId, schoolId]
-      );
-      res.json({ success: true });
+    // Increment vote count for the candidate in the delegates_votes table
+    await db.query(
+      'INSERT INTO delegates_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
+      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+      [leaderId, schoolId]
+    );
+    res.json({ success: true });
   } catch (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-          res.status(400).json({ message: 'You have already voted for this delegate.' });
-      } else {
-          res.status(500).json({ message: 'Failed to cast vote.' });
-      }
+    console.error('Failed to cast vote for delegate:', err);
+    res.status(500).json({ message: 'Failed to cast vote.' });
   }
 });
 
-// Route for voting for congresspersons
 app.post('/vote/congressperson', async (req, res) => {
-  const { email, leaderId, schoolId } = req.body;
+  const { leaderId, schoolId } = req.body;
 
   try {
-      await db.query(
-          'INSERT INTO congressperson_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
-          [email, leaderId, schoolId]
-      );
-      res.json({ success: true });
+    
+    await db.query(
+      'INSERT INTO congressperson_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
+      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+      [leaderId, schoolId]
+    );
+    res.json({ success: true });
   } catch (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-          res.status(400).json({ message: 'You have already voted for this congressperson.' });
-      } else {
-          res.status(500).json({ message: 'Failed to cast vote.' });
-      }
+    console.error('Failed to cast vote for congressperson:', err);
+    res.status(500).json({ message: 'Failed to cast vote.' });
   }
 });
 
-// Route for voting for hostel representatives
+
+
 app.post('/vote/hostelrep', async (req, res) => {
-  const { email, leaderId, schoolId } = req.body;
+  const { leaderId, schoolId } = req.body;
 
   try {
-      await db.query(
-          'INSERT INTO hostelrep_votes (user_email, leader_id, school_id) VALUES (?, ?, ?)',
-          [email, leaderId, schoolId]
-      );
-      res.json({ success: true });
+    // Increment the vote count for the candidate
+    const [result] = await db.query(
+      'INSERT INTO hostelrep_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
+      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+      [leaderId, schoolId]
+    );
+    res.json({ success: true });
   } catch (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-          res.status(400).json({ message: 'You have already voted for this hostel representative.' });
-      } else {
-          res.status(500).json({ message: 'Failed to cast vote.' });
-      }
+    console.error('Failed to cast vote for hostel representative:', err);
+    res.status(500).json({ message: 'Failed to cast vote.' });
   }
 });
-// Assume you have a table 'votes' where each vote is stored with a candidate ID
+
+
+
 app.get('/api/admin/vote-stats', async (req, res) => {
   try {
-    // Queries to get the vote count per leader for each role
     const congresspersonVotes = `
-      SELECT leader_id, COUNT(*) AS voteCount
-      FROM congressperson_votes
-      GROUP BY leader_id
+      SELECT c.name AS candidateName,c.photo_path AS photo , cv.leader_id, SUM(cv.vote_count) AS voteCount
+      FROM congressperson_votes AS cv
+      JOIN candidates AS c ON cv.leader_id = c.id  -- Use c.id instead of c.leader_id
+      GROUP BY cv.leader_id, c.name
     `;
+    
     const delegateVotes = `
-      SELECT leader_id, COUNT(*) AS voteCount
-      FROM delegates_votes
-      GROUP BY leader_id
+      SELECT c.name AS candidateName,c.photo_path AS photo , dv.leader_id, SUM(dv.vote_count) AS voteCount
+      FROM delegates_votes AS dv
+      JOIN candidates AS c ON dv.leader_id = c.id  -- Use c.id instead of c.leader_id
+      GROUP BY dv.leader_id, c.name
     `;
+    
     const hostelRepVotes = `
-      SELECT leader_id, COUNT(*) AS voteCount
-      FROM hostelrep_votes
-      GROUP BY leader_id
+      SELECT c.name AS candidateName,c.photo_path AS photo , hrv.leader_id, SUM(hrv.vote_count) AS voteCount
+      FROM hostelrep_votes AS hrv
+      JOIN candidates AS c ON hrv.leader_id = c.id  -- Use c.id instead of c.leader_id
+      GROUP BY hrv.leader_id, c.name
     `;
 
-    // Execute the queries
+    // Execute the queries and get the rows
     const [congressResults] = await db.query(congresspersonVotes);
     const [delegateResults] = await db.query(delegateVotes);
     const [hostelRepResults] = await db.query(hostelRepVotes);
 
-    // Format the response with separate objects for each role
+    // Check if results are returned as expected, adjust if necessary
     const voteStats = {
-      congressperson: congressResults,
-      delegate: delegateResults,
-      hostelRep: hostelRepResults,
+      congressperson: congressResults || [],
+      delegate: delegateResults || [],
+      hostelRep: hostelRepResults || [],
     };
 
     res.json(voteStats);
@@ -650,6 +646,8 @@ app.get('/api/admin/vote-stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
+
+
 
 
 app.get('/', (req, res) => {
