@@ -67,6 +67,24 @@ app.get('/schools', async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
+app.get('/houses', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+
+    const [houses] = await db.query('SELECT * FROM houses');
+ 
+    if (houses.length === 0) {
+      return res.status(404).json({ message: 'No schools found' });
+    }
+    
+    res.json(houses);
+  } catch (error) {
+    console.error('Error fetching schools:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 app.get('/departments/:schoolId', async (req, res) => {
     const { schoolId } = req.params;
   
