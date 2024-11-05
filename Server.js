@@ -664,7 +664,35 @@ app.get('/api/admin/vote-stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
+app.get('/api/admin/vote-stats/school/:schoolId', async (req, res) => {
+  const { schoolId } = req.params;
 
+  try {
+    const congresspersonVotes = `
+      SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
+      FROM congressperson_votes AS cv
+      JOIN candidates AS c ON cv.leader_id = c.id
+      WHERE c.school_id = ?
+      GROUP BY cv.leader_id, c.name, c.photo_path
+    `;
+    
+    const delegateVotes = `
+      SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
+      FROM delegates_votes AS dv
+      JOIN candidates AS c ON dv.leader_id = c.id
+      WHERE c.school_id = ?
+      GROUP BY dv.leader_id, c.name, c.photo_path
+    `;
+
+    const [congressResults] = await db.query(congresspersonVotes, [schoolId]);
+    const [delegateResults] = await db.query(delegateVotes, [schoolId]);
+
+    res.json({ congressperson: congressResults, delegate: delegateResults });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch vote stats for the school' });
+  }
+});
 
 
 
