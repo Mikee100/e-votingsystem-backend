@@ -6,6 +6,10 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
+import moment from 'moment';
+import cron  from 'node-cron';
+
+
 
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
@@ -66,6 +70,26 @@ app.get('/schools', async (req, res) => {
     console.error('Error fetching schools:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
+})
+;
+app.get('/api/allhouses', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+
+    const [houses] = await db.query('SELECT id, house_name FROM houses');
+ 
+    if (houses.length === 0) {
+      return res.status(404).json({ message: 'No houses found' });
+    }
+    
+    res.json(houses);
+  } catch (error) {
+    console.error('Error fetching Houses:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+
 });
 app.get('/houses', async (req, res) => {
   try {
@@ -263,8 +287,6 @@ app.post('/login', async (req, res) => {
       return res.status(500).json({ message: 'Server error' });
   }
 });
-
-
 app.post('/logout', (req, res) => {
 
   res.status(200).json({ message: 'Logout successful' });
@@ -684,10 +706,19 @@ app.get('/api/admin/vote-stats/school/:schoolId', async (req, res) => {
       GROUP BY dv.leader_id, c.name, c.photo_path
     `;
 
+    const hostelRepVotes = `
+      SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
+      FROM hostelrep_votes AS hrv
+      JOIN candidates AS c ON hrv.leader_id = c.id
+      WHERE c.school_id = ?
+      GROUP BY hrv.leader_id, c.name, c.photo_path
+    `;
+
     const [congressResults] = await db.query(congresspersonVotes, [schoolId]);
     const [delegateResults] = await db.query(delegateVotes, [schoolId]);
+    const [hostelRepResults] = await db.query(hostelRepVotes, [schoolId]);
 
-    res.json({ congressperson: congressResults, delegate: delegateResults });
+    res.json({ congressperson: congressResults, delegate: delegateResults, hostelRep: hostelRepResults });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to fetch vote stats for the school' });
@@ -695,6 +726,159 @@ app.get('/api/admin/vote-stats/school/:schoolId', async (req, res) => {
 });
 
 
+
+app.get('/api/candidates/house/:houseId', async (req, res) => {
+  const { houseId } = req.params;
+
+  try {
+    const candidatesQuery = `
+      SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
+      FROM hostelrep_votes AS dv
+      JOIN candidates AS c ON dv.leader_id = c.id
+      WHERE c.hostel = ?
+      GROUP BY dv.leader_id, c.name, c.photo_path
+    `;
+    
+    const [candidatesResults] = await db.query(candidatesQuery, [houseId]);
+
+    res.json({ candidates: candidatesResults });
+  } catch (error) {
+    console.error('Error fetching candidates for house:', error);
+    res.status(500).json({ error: 'Failed to fetch candidates for house' });
+  }
+});
+
+
+
+app.get('/api/elections', async (req, res) => {
+  try {
+    // Await the query result instead of using a callback
+    const [rows] = await db.query('SELECT * FROM elections');
+    res.status(200).json(rows); // Send the rows to the client
+  } catch (error) {
+    console.error('Error fetching elections:', error);  // Log the full error details
+    res.status(500).json({ error: 'Failed to fetch elections' });
+  }
+});
+
+
+// Example: Create an election
+app.post('/api/elections', async (req, res) => {
+  const { name, start_date, end_date } = req.body;
+
+  if (!name || !start_date || !end_date) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Function to format date to MySQL datetime format
+  const formatDateForMySQL = (date) => {
+    if (!date) {
+      throw new Error('Invalid date');
+    }
+    return new Date(date).toISOString().slice(0, 19).replace('T', ' ');
+  };
+
+  try {
+    console.log('Received start_date:', start_date);
+    console.log('Received end_date:', end_date);
+
+    const formattedStartDate = formatDateForMySQL(start_date);
+    const formattedEndDate = formatDateForMySQL(end_date);
+
+    console.log('Formatted start_date:', formattedStartDate);
+    console.log('Formatted end_date:', formattedEndDate);
+
+    const [result] = await db.query(
+      'INSERT INTO elections (name, start_date, end_date) VALUES (?, ?, ?)',
+      [name, formattedStartDate, formattedEndDate]
+    );
+    res.status(201).json({ message: 'Election created', id: result.insertId });
+  } catch (error) {
+    console.error('Error creating election:', error); // Log detailed error
+    res.status(500).json({ error: 'Error creating election' });
+  }
+});
+
+
+app.put('/api/elections/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // 'open' or 'closed'
+
+  if (!['open', 'closed'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status value' });
+  }
+
+  try {
+    await db.query('UPDATE elections SET status = $1 WHERE id = $2', [status, id]);
+    res.status(200).json({ message: 'Election status updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update election status' });
+  }
+});
+// Example: Endpoint to update election dates
+app.put("/api/elections/:id/dates", async (req, res) => {
+  const { start_date, end_date } = req.body;
+  const electionId = req.params.id;
+
+  // Function to format date to MySQL datetime format
+  const formatDateForMySQL = (date) => {
+    if (!date) {
+      throw new Error('Invalid date');
+    }
+    return new Date(date).toISOString().slice(0, 19).replace('T', ' ');
+  };
+
+  try {
+    console.log('Received start_date:', start_date);
+    console.log('Received end_date:', end_date);
+
+    const formattedStartDate = formatDateForMySQL(start_date);
+    const formattedEndDate = formatDateForMySQL(end_date);
+
+    console.log('Formatted start_date:', formattedStartDate);
+    console.log('Formatted end_date:', formattedEndDate);
+
+    const [result] = await db.query(
+      "UPDATE elections SET start_date = ?, end_date = ? WHERE id = ?",
+      [formattedStartDate, formattedEndDate, electionId]
+    );
+    res.status(200).json({ message: "Dates updated successfully" });
+  } catch (error) {
+    console.error("Error updating dates:", error);
+    res.status(500).json({ error: "Failed to update dates" });
+  }
+});
+
+
+app.get('/api/elections/:id/status', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    console.log(`Checking status for election ID: ${id}`);
+    const [rows] = await db.query('SELECT end_date FROM elections WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      console.log(`Election not found for ID: ${id}`);
+      return res.status(404).json({ error: 'Election not found' });
+    }
+
+    const endDate = new Date(rows[0].end_date);
+    const currentDate = new Date();
+
+    console.log(`End date: ${endDate}`);
+    console.log(`Current date: ${currentDate}`);
+
+    if (currentDate > endDate) {
+      console.log(`Election ID: ${id} is closed`);
+      return res.status(200).json({ status: 'closed' });
+    } else {
+      console.log(`Election ID: ${id} is open`);
+      return res.status(200).json({ status: 'open' });
+    }
+  } catch (error) {
+    console.error('Error checking election status:', error);
+    res.status(500).json({ error: 'Failed to check election status' });
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
