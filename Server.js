@@ -258,35 +258,35 @@ app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-      // Fetch user from the database
-      const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
-      if (user.length === 0) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-      }
+    // Fetch user from the database
+    const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (user.length === 0) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
 
-      const existingUser = user[0];
-      // Check if user is verified
-      if (!existingUser.isVerified) {
-          return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
-      }
+    const existingUser = user[0];
+    // Check if user is verified
+    if (!existingUser.isVerified) {
+      return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
+    }
 
-      // Compare password
-      const passwordMatch = await bcrypt.compare(password, existingUser.password);
-      if (!passwordMatch) {
-          return res.status(401).json({ message: 'Invalid email or password' });
-      }
+    // Compare password
+    const passwordMatch = await bcrypt.compare(password, existingUser.password);
+    if (!passwordMatch) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
 
-      // Create JWT token
-      const token = jwt.sign({ userId: existingUser.id, email: existingUser.email }, JWT_SECRET, { expiresIn: '1h' });
+    // Create JWT token
+    const token = jwt.sign({ userId: existingUser.id, email: existingUser.email, role: existingUser.role }, JWT_SECRET, { expiresIn: '1h' });
 
-     
-      // Send token back to the client
-      return res.status(200).json({ message: 'Login successful', token });
+    // Send token and role back to the client
+    return res.status(200).json({ message: 'Login successful', token, role: existingUser.role });
   } catch (error) {
-      console.error('Error during login:', error.message);
-      return res.status(500).json({ message: 'Server error' });
+    console.error('Error during login:', error.message);
+    return res.status(500).json({ message: 'Server error' });
   }
 });
+
 app.post('/logout', (req, res) => {
 
   res.status(200).json({ message: 'Logout successful' });
@@ -880,9 +880,222 @@ app.get('/api/elections/:id/status', async (req, res) => {
   }
 });
 
+app.post('/admin/register', async (req, res) => {
+  const { email, password, name } = req.body;
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const [result] = await db.query('INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)', [email, hashedPassword, name, 'admin']);
+    res.status(201).json({ success: true, id: result.insertId });
+  } catch (error) {
+    console.error('Error registering admin:', error);
+    res.status(500).json({ success: false, error: 'Failed to register admin' });
+  }
+});
+
+app.post('/vote', async (req, res) => {
+  const { email, leaderId, role, schoolId } = req.body;
+
+  try {
+    // Check if user already voted for the role
+    const existingVote = await db.query(
+      'SELECT * FROM votes WHERE email = ? AND role = ?',
+      [email, role]
+    );
+
+    if (existingVote.length > 0) {
+      return res.status(400).json({ success: false, message: 'You have already voted for this role!' });
+    }
+
+    // Record the vote
+    await db.query(
+      'INSERT INTO votes (email, leader_id, role, school_id, created_at) VALUES (?, ?, ?, ?, NOW())',
+      [email, leaderId, role, schoolId]
+    );
+
+    return res.json({ success: true, message: 'Vote cast successfully!' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Error processing vote.' });
+  }
+});
+
+app.get('/voting-status', async (req, res) => {
+  const { email } = req.query;
+
+  try {
+    const votes = await db.query('SELECT role FROM votes WHERE email = ?', [email]);
+    res.json({ success: true, votes });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Error fetching voting status.' });
+  }
+});
+
+app.post('/saveVote', async (req, res) => {
+  const { email, leaderId, role } = req.body;
+
+  // Validate required parameters
+  if (!email || !leaderId || !role) {
+    return res.status(400).json({ message: 'Missing required parameters' });
+  }
+
+  try {
+    // Step 1: Check if the user has already voted for this category
+    const [existingVote] = await db.query('SELECT * FROM votes WHERE email = ? AND role = ?', [email, role]);
+
+    if (existingVote.length > 0) {
+      // If the user has already voted for this category, reject the new vote
+      return res.status(400).json({ message: 'You have already voted for this category.' });
+    }
+
+    // Step 2: Insert the new vote into the database
+    const query = `
+      INSERT INTO votes (email, leader_id, role) 
+      VALUES (?, ?, ?)
+    `;
+    const values = [email, leaderId, role];
+
+    await db.query(query, values);
+
+    // Step 3: Respond with success
+    return res.status(200).json({ success: true, message: 'Vote saved successfully' });
+  } catch (error) {
+    console.error('Error saving vote:', error);
+    return res.status(500).json({ message: 'Error saving vote' });
+  }
+});
+
+///////////////////President///////////////////////////////////////////////////////////////
+
+// Get all leaders
+app.get('/leaders', async (req, res) => {
+  try {
+    const [leaders] = await db.query('SELECT * FROM leaders');
+    res.json({ success: true, leaders });
+  } catch (error) {
+    console.error('Error fetching leaders:', error);
+    res.status(500).json({ success: false, message: 'Error fetching leaders' });
+  }
+});
+
+// Get a specific leader by ID
+app.get('/leaders/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [leader] = await db.query('SELECT * FROM leaders WHERE id = ?', [id]);
+    if (leader.length === 0) {
+      return res.status(404).json({ success: false, message: 'Leader not found' });
+    }
+    res.json({ success: true, leader: leader[0] });
+  } catch (error) {
+    console.error('Error fetching leader:', error);
+    res.status(500).json({ success: false, message: 'Error fetching leader' });
+  }
+});
+
+// Create a new leader
+app.post('/leaders', async (req, res) => {
+  const { partyId, position, name } = req.body;
+
+  // Validate required parameters
+  if (!partyId || !position || !name) {
+    return res.status(400).json({ message: 'Missing required parameters' });
+  }
+
+  try {
+    const query = 'INSERT INTO leaders (party_id, position, name) VALUES (?, ?, ?)';
+    const values = [partyId, position, name];
+
+    await db.query(query, values);
+
+    res.status(201).json({ success: true, message: 'Leader created successfully' });
+  } catch (error) {
+    console.error('Error creating leader:', error);
+    res.status(500).json({ success: false, message: 'Error creating leader' });
+  }
+});
+
+// Update a leader
+app.put('/leaders/:id', async (req, res) => {
+  const { id } = req.params;
+  const { partyId, position, name } = req.body;
+
+  // Validate required parameters
+  if (!partyId || !position || !name) {
+    return res.status(400).json({ message: 'Missing required parameters' });
+  }
+
+  try {
+    const query = 'UPDATE leaders SET party_id = ?, position = ?, name = ? WHERE id = ?';
+    const values = [partyId, position, name, id];
+
+    const [result] = await db.query(query, values);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Leader not found' });
+    }
+
+    res.json({ success: true, message: 'Leader updated successfully' });
+  } catch (error) {
+    console.error('Error updating leader:', error);
+    res.status(500).json({ success: false, message: 'Error updating leader' });
+  }
+});
+
+// Delete a leader
+app.delete('/leaders/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await db.query('DELETE FROM leaders WHERE id = ?', [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Leader not found' });
+    }
+
+    res.json({ success: true, message: 'Leader deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting leader:', error);
+    res.status(500).json({ success: false, message: 'Error deleting leader' });
+  }
+});
+
+// Existing endpoints...
+
+app.post('/register-president', async (req, res) => {
+  const { partyName, motto, campaignObjectives, leaders } = req.body;
+
+  try {
+    // Insert party details into the database
+    const [result] = await db.query(
+      'INSERT INTO parties (party_name, motto, campaign_objectives) VALUES (?, ?, ?)',
+      [partyName, motto, campaignObjectives]
+    );
+
+    const partyId = result.insertId;
+
+    // Insert leaders into the database
+    for (const leader of leaders) {
+      await db.query(
+        'INSERT INTO leaders (party_id, position, name) VALUES (?, ?, ?)',
+        [partyId, leader.position, leader.name]
+      );
+    }
+
+    res.status(201).json({ success: true, message: 'President registered successfully' });
+  } catch (error) {
+    console.error('Error registering president:', error);
+    res.status(500).json({ success: false, message: 'Failed to register president' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.send('Hello, World!');
 });
+
+
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
