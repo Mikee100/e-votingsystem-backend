@@ -1062,19 +1062,31 @@ app.delete('/leaders/:id', async (req, res) => {
   }
 });
 
-// Existing endpoints...
 
-app.post('/register-president', async (req, res) => {
-  const { partyName, motto, campaignObjectives, leaders } = req.body;
+
+
+app.post('/api/register-president', async (req, res) => {
+  const { partyName, motto, campaignObjectives, leaders, email, password } = req.body;
 
   try {
-    // Insert party details into the database
-    const [result] = await db.query(
-      'INSERT INTO parties (party_name, motto, campaign_objectives) VALUES (?, ?, ?)',
-      [partyName, motto, campaignObjectives]
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Insert user details into the database
+    const [userResult] = await db.query(
+      'INSERT INTO users (email, password, role) VALUES (?, ?, ?)',
+      [email, hashedPassword, 'president']
     );
 
-    const partyId = result.insertId;
+    const presidentId = userResult.insertId;
+
+    // Insert party details into the database
+    const [partyResult] = await db.query(
+      'INSERT INTO parties (party_name, motto, campaign_objectives, president_id) VALUES (?, ?, ?, ?)',
+      [partyName, motto, campaignObjectives, presidentId]
+    );
+
+    const partyId = partyResult.insertId;
 
     // Insert leaders into the database
     for (const leader of leaders) {
@@ -1090,6 +1102,48 @@ app.post('/register-president', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to register president' });
   }
 });
+
+
+app.get('/api/party', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ message: 'Authorization token is required' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const presidentId = decoded.userId;
+
+
+    const [partyDetails] = await db.query(
+      'SELECT * FROM parties WHERE president_id = ?',
+      [presidentId]
+    );
+
+    if (partyDetails.length === 0) {
+      return res.status(404).json({ message: 'Party not found' });
+    }
+
+    const [leaders] = await db.query(
+      'SELECT * FROM leaders WHERE party_id = ?',
+      [partyDetails[0].id]
+    );
+
+ 
+
+    res.json({ ...partyDetails[0], leaders });
+  } catch (error) {
+    console.error('Error fetching party details:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+
+
+
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
