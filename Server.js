@@ -1139,11 +1139,93 @@ app.get('/api/party', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+app.get('/candidate-status', async (req, res) => {
+  const { email } = req.query;
+
+  try {
+    // Fetch the user's admission number based on their email
+    const [userDetails] = await db.query(
+      'SELECT admissionno FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (userDetails.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const admissionNo = userDetails[0].admission_no;
+
+    // Check if the admission number exists in the candidates table
+    const [candidateDetails] = await db.query(
+      'SELECT * FROM candidates WHERE admission_no = ?',
+      [admissionNo]
+    );
+
+    if (candidateDetails.length === 0) {
+      return res.json({ isCandidate: false });
+    }
+
+    res.json({ isCandidate: true });
+  } catch (error) {
+    console.error('Error checking candidate status:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 
+app.get('/api/candidate/:id', async (req, res) => {
+  const { id } = req.params;
 
+  try {
+    const [candidateDetails] = await db.query(
+      'SELECT * FROM candidates WHERE id = ?',
+      [id]
+    );
 
+    if (candidateDetails.length === 0) {
+      return res.status(404).json({ message: 'Candidate not found' });
+    }
 
+    const candidate = candidateDetails[0];
+    let performanceData = [];
+    let otherCandidatesData = [];
+
+    // Fetch performance data based on the candidate's role
+    if (candidate.role === '2') {
+      [performanceData] = await db.query(
+        'SELECT * FROM hostelrep_votes WHERE leader_id = ?',
+        [id]
+      );
+    } else if (candidate.role === '3') {
+      [performanceData] = await db.query(
+        'SELECT * FROM delegates_votes WHERE leader_id = ?',
+        [id]
+      );
+      [otherCandidatesData] = await db.query(
+        'SELECT c.name, dv.vote_count FROM candidates c JOIN delegates_votes dv ON c.id = dv.leader_id WHERE c.school_id = ? AND c.id != ?',
+        [candidate.school_id, id]
+      );
+      console.log('Other Candidates Data (Delegates):', otherCandidatesData); // Log the other candidates data
+    } else if (candidate.role === '1') {
+      [performanceData] = await db.query(
+        'SELECT * FROM congressperson_votes WHERE leader_id = ?',
+        [id]
+      );
+      [otherCandidatesData] = await db.query(
+        'SELECT c.name, cv.vote_count FROM candidates c JOIN congressperson_votes cv ON c.id = cv.leader_id WHERE c.school_id = ? AND c.id != ?',
+        [candidate.school_id, id]
+      );
+      console.log('Other Candidates Data (Congresspersons):', otherCandidatesData); // Log the other candidates data
+    }
+
+    console.log('Performance Data:', performanceData); // Log the performance data
+
+    res.json({ ...candidate, performanceData, otherCandidatesData });
+  } catch (error) {
+    console.error('Error fetching candidate details:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
