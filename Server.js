@@ -1227,6 +1227,72 @@ app.get('/api/candidate/:id', async (req, res) => {
   }
 });
 
+
+app.get('/api/winners', async (req, res) => {
+  try {
+    // Fetch the winners for each category grouped by school
+    const [houseRepWinners] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, c.hostel, hr.vote_count, c.photo_path
+       FROM candidates c
+       JOIN hostelrep_votes hr ON c.id = hr.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE hr.vote_count = (
+         SELECT MAX(hr2.vote_count)
+         FROM hostelrep_votes hr2
+         JOIN candidates c2 ON hr2.leader_id = c2.id
+         WHERE c2.school_id = c.school_id
+       )`
+    );
+
+    const [delegateWinners] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, d.vote_count, c.photo_path
+       FROM candidates c
+       JOIN delegates_votes d ON c.id = d.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE d.vote_count = (
+         SELECT MAX(d2.vote_count)
+         FROM delegates_votes d2
+         JOIN candidates c2 ON d2.leader_id = c2.id
+         WHERE c2.school_id = c.school_id
+       )`
+    );
+
+    const [congresspersonWinners] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, cp.vote_count, c.photo_path
+       FROM candidates c
+       JOIN congressperson_votes cp ON c.id = cp.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE cp.vote_count = (
+         SELECT MAX(cp2.vote_count)
+         FROM congressperson_votes cp2
+         JOIN candidates c2 ON cp2.leader_id = c2.id
+         WHERE c2.school_id = c.school_id
+       )`
+    );
+
+    res.json({
+      houseRepWinners,
+      delegateWinners,
+      congresspersonWinners,
+    });
+  } catch (error) {
+    console.error('Error fetching winners:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/presidential-candidates', async (req, res) => {
+  try {
+    const [presidentialCandidates] = await db.query(
+      'SELECT id, name, party, photo_path FROM candidates WHERE role = "President"'
+    );
+    res.json(presidentialCandidates);
+  } catch (error) {
+    console.error('Error fetching presidential candidates:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.send('Hello, World!');
 });
