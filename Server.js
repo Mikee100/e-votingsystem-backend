@@ -8,17 +8,19 @@ import multer from 'multer';
 import { fileURLToPath } from 'url';
 import moment from 'moment';
 import cron  from 'node-cron';
-
+import bodyParser from "body-parser";
 
 
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
 const JWT_SECRET='waweru';
-const  secret_key='waweru'
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 // Enable CORS for all routes
 app.use(cors({
@@ -1153,14 +1155,14 @@ app.get('/candidate-status', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const admissionNo = userDetails[0].admission_no;
-
+    const admissionNo = userDetails[0].admissionno; // Corrected field name
+ 
     // Check if the admission number exists in the candidates table
     const [candidateDetails] = await db.query(
       'SELECT * FROM candidates WHERE admission_no = ?',
       [admissionNo]
     );
-
+ 
     if (candidateDetails.length === 0) {
       return res.json({ isCandidate: false });
     }
@@ -1171,7 +1173,6 @@ app.get('/candidate-status', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 app.get('/api/candidate/:id', async (req, res) => {
   const { id } = req.params;
@@ -1189,6 +1190,7 @@ app.get('/api/candidate/:id', async (req, res) => {
     const candidate = candidateDetails[0];
     let performanceData = [];
     let otherCandidatesData = [];
+    let hasWon = false;
 
     // Fetch performance data based on the candidate's role
     if (candidate.role === '2') {
@@ -1205,7 +1207,6 @@ app.get('/api/candidate/:id', async (req, res) => {
         'SELECT c.name, dv.vote_count FROM candidates c JOIN delegates_votes dv ON c.id = dv.leader_id WHERE c.school_id = ? AND c.id != ?',
         [candidate.school_id, id]
       );
-      console.log('Other Candidates Data (Delegates):', otherCandidatesData); // Log the other candidates data
     } else if (candidate.role === '1') {
       [performanceData] = await db.query(
         'SELECT * FROM congressperson_votes WHERE leader_id = ?',
@@ -1215,19 +1216,21 @@ app.get('/api/candidate/:id', async (req, res) => {
         'SELECT c.name, cv.vote_count FROM candidates c JOIN congressperson_votes cv ON c.id = cv.leader_id WHERE c.school_id = ? AND c.id != ?',
         [candidate.school_id, id]
       );
-      console.log('Other Candidates Data (Congresspersons):', otherCandidatesData); // Log the other candidates data
     }
 
-    console.log('Performance Data:', performanceData); // Log the performance data
+    // Determine if the candidate has won in their school
+    const totalVotes = performanceData.reduce((acc, data) => acc + data.vote_count, 0);
+    const maxVotes = Math.max(...performanceData.map(data => data.vote_count));
+    if (totalVotes === maxVotes) {
+      hasWon = true;
+    }
 
-    res.json({ ...candidate, performanceData, otherCandidatesData });
+    res.json({ ...candidate, performanceData, otherCandidatesData, hasWon });
   } catch (error) {
     console.error('Error fetching candidate details:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
-
-
 app.get('/api/winners', async (req, res) => {
   try {
     // Fetch the winners for each category grouped by school
@@ -1281,10 +1284,13 @@ app.get('/api/winners', async (req, res) => {
   }
 });
 
-app.get('/api/presidential-candidates', async (req, res) => {
+app.get('/api/all/presidential-candidates', async (req, res) => {
   try {
     const [presidentialCandidates] = await db.query(
-      'SELECT id, name, party, photo_path FROM candidates WHERE role = "President"'
+      `SELECT p.id, p.party_name, p.motto, p.campaign_objectives, l.name AS president_name, s.name AS secretary_name
+       FROM parties p
+       JOIN leaders l ON p.id = l.party_id AND l.position = 'Secretary'
+       LEFT JOIN leaders s ON p.id = s.party_id AND s.position = 'Vice President'`
     );
     res.json(presidentialCandidates);
   } catch (error) {
@@ -1292,6 +1298,39 @@ app.get('/api/presidential-candidates', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+app.post('/api/vote-president', async (req, res) => {
+  const { partyId, voterLeaderId } = req.body;
+
+  // Log the incoming request
+  console.log('Incoming vote data:', req.body);
+
+  if (!partyId || !voterLeaderId) {
+      console.error('Validation Error: Missing partyId or voterLeaderId');
+      return res.status(400).json({ error: 'Party ID and Voter Leader ID are required' });
+  }
+
+  try {
+      const [leader] = await db.query('SELECT id FROM leaders WHERE id = ?', [voterLeaderId]);
+      if (leader.length === 0) {
+          console.error(`Invalid Voter Leader ID: ${voterLeaderId}`);
+          return res.status(400).json({ error: 'Invalid Voter Leader ID' });
+      }
+
+      const [party] = await db.query('SELECT id FROM parties WHERE id = ?', [partyId]);
+      if (party.length === 0) {
+          console.error(`Invalid Party ID: ${partyId}`);
+          return res.status(400).json({ error: 'Invalid Party ID' });
+      }
+
+      await db.query('INSERT INTO presidential_votes (party_id, voter_leader_id) VALUES (?, ?)', [partyId, voterLeaderId]);
+      res.status(201).json({ message: 'Vote recorded successfully' });
+  } catch (error) {
+      console.error('Error recording vote:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
