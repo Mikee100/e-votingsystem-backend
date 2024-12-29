@@ -10,7 +10,7 @@ import moment from 'moment';
 import cron  from 'node-cron';
 import bodyParser from "body-parser";
 
-
+import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
@@ -36,6 +36,8 @@ const __dirname = path.dirname(__filename);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(express.json());
+
+
 
 // Create MySQL connection
 let db;
@@ -279,7 +281,7 @@ app.post('/login', async (req, res) => {
     }
 
     // Create JWT token
-    const token = jwt.sign({ userId: existingUser.id, email: existingUser.email, role: existingUser.role }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ userId: existingUser.id, email: existingUser.email, role: existingUser.role }, JWT_SECRET, { expiresIn: '24h' });
 
     // Send token and role back to the client
     return res.status(200).json({ message: 'Login successful', token, role: existingUser.role });
@@ -402,22 +404,19 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
 
   let inSchoolValue = null; 
 
-
   if (role === "House Rep") {
-    
     inSchoolValue = inSchool === 'In-School' || inSchool === 'Out-School' ? inSchool : null;
   } else {
-    
     inSchoolValue = null;
   }
 
   const sql = `
     INSERT INTO candidates (
-      name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path, is_approved
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath], (error, results) => {
+  db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath, false], (error, results) => {
     if (error) {
       console.error('Error inserting candidate:', error);
       res.status(500).send('Error inserting candidate');
@@ -426,7 +425,42 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
     res.status(201).send('Candidate registered successfully');
   });
 });
+app.post('/api/approve-candidate/:id', async (req, res) => {
+  const { id } = req.params;
 
+  try {
+    const sql = 'UPDATE candidates SET is_approved = TRUE WHERE id = ?';
+    await db.query(sql, [id]);
+    res.status(200).send('Candidate approved successfully');
+  } catch (error) {
+    console.error('Error approving candidate:', error);
+    res.status(500).send('Error approving candidate');
+  }
+});
+
+app.post('/api/decline-candidate/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const sql = 'DELETE FROM candidates WHERE id = ?';
+    await db.query(sql, [id]);
+    res.status(200).send('Candidate declined successfully');
+  } catch (error) {
+    console.error('Error declining candidate:', error);
+    res.status(500).send('Error declining candidate');
+  }
+});
+app.get('/api/unapproved-candidates', async (req, res) => {
+  try {
+    const [unapprovedCandidates] = await db.query(
+      'SELECT * FROM candidates WHERE is_approved = FALSE'
+    );
+    res.status(200).json(unapprovedCandidates);
+  } catch (error) {
+    console.error('Error fetching unapproved candidates:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 
 app.get('/userprofile', async (req, res) => {
@@ -1067,8 +1101,9 @@ app.delete('/leaders/:id', async (req, res) => {
 
 
 
-app.post('/api/register-president', async (req, res) => {
+app.post('/api/register-president', upload.array('images'), async (req, res) => {
   const { partyName, motto, campaignObjectives, leaders, email, password } = req.body;
+  const files = req.files;
 
   try {
     // Hash the password
@@ -1091,10 +1126,12 @@ app.post('/api/register-president', async (req, res) => {
     const partyId = partyResult.insertId;
 
     // Insert leaders into the database
-    for (const leader of leaders) {
+    for (let i = 0; i < leaders.length; i++) {
+      const leader = leaders[i];
+      const image = files[i] ? files[i].path : null;
       await db.query(
-        'INSERT INTO leaders (party_id, position, name) VALUES (?, ?, ?)',
-        [partyId, leader.position, leader.name]
+        'INSERT INTO leaders (party_id, position, name, image) VALUES (?, ?, ?, ?)',
+        [partyId, leader.position, leader.name, image]
       );
     }
 
@@ -1104,6 +1141,7 @@ app.post('/api/register-president', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to register president' });
   }
 });
+
 
 
 app.get('/api/party', async (req, res) => {
@@ -1229,7 +1267,7 @@ app.get('/api/candidate/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching candidate details:', error);
     res.status(500).json({ message: 'Server error' });
-  }
+  }4
 });
 app.get('/api/winners', async (req, res) => {
   try {
@@ -1298,39 +1336,99 @@ app.get('/api/all/presidential-candidates', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
 app.post('/api/vote-president', async (req, res) => {
-  const { partyId, voterLeaderId } = req.body;
+  const { email, partyId } = req.body;
 
-  // Log the incoming request
-  console.log('Incoming vote data:', req.body);
+  console.log(`\nReceived POST /api/vote-president request:`, req.body);
 
-  if (!partyId || !voterLeaderId) {
-      console.error('Validation Error: Missing partyId or voterLeaderId');
-      return res.status(400).json({ error: 'Party ID and Voter Leader ID are required' });
+  if (!email || !partyId) {
+    console.error('Error: Missing email or partyId in request body.');
+    return res.status(400).json({ message: 'Email and partyId are required.' });
   }
 
   try {
-      const [leader] = await db.query('SELECT id FROM leaders WHERE id = ?', [voterLeaderId]);
-      if (leader.length === 0) {
-          console.error(`Invalid Voter Leader ID: ${voterLeaderId}`);
-          return res.status(400).json({ error: 'Invalid Voter Leader ID' });
-      }
+    console.log(`User attempting to vote: { email: ${email}, partyId: ${partyId} }`);
 
-      const [party] = await db.query('SELECT id FROM parties WHERE id = ?', [partyId]);
-      if (party.length === 0) {
-          console.error(`Invalid Party ID: ${partyId}`);
-          return res.status(400).json({ error: 'Invalid Party ID' });
-      }
+    // Check if user has already voted for any party (i.e., only one vote per user allowed)
+    const [existingVote] = await db.query(
+      'SELECT * FROM presidential_votes WHERE email = ?',
+      [email]
+    );
+    console.log('Existing vote:', existingVote);
 
-      await db.query('INSERT INTO presidential_votes (party_id, voter_leader_id) VALUES (?, ?)', [partyId, voterLeaderId]);
-      res.status(201).json({ message: 'Vote recorded successfully' });
+    if (existingVote.length > 0) {
+      console.warn('User has already voted for a president. Rejecting request.');
+      return res.status(400).json({ message: 'You have already voted for a president.' });
+    }
+
+    // Record the vote
+    const [insertResult] = await db.query(
+      'INSERT INTO presidential_votes (email, party_id) VALUES (?, ?)',
+      [email, partyId]
+    );
+
+    console.log('Vote successfully recorded:', insertResult);
+
+    return res.status(200).json({ message: 'Your vote has been recorded successfully.' });
   } catch (error) {
-      console.error('Error recording vote:', error);
-      res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error occurred while processing vote:', error);
+    return res.status(500).json({ message: 'An error occurred while processing your vote.' });
   }
 });
 
+app.get('/api/presidential-standings', async (req, res) => {
+  try {
+    const [standings] = await db.query(
+      `SELECT p.id AS party_id, p.party_name, COUNT(v.id) AS votes
+       FROM parties p
+       LEFT JOIN presidential_votes v ON p.id = v.party_id
+       GROUP BY p.id, p.party_name
+       ORDER BY votes DESC`
+    );
+    res.json(standings);
+  } catch (error) {
+    console.error('Error fetching presidential standings:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
+app.get('/api/president/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [candidateDetails] = await db.query(
+      `SELECT p.party_name, p.motto, p.campaign_objectives, l.position, l.name, l.image
+       FROM parties p
+       JOIN leaders l ON p.id = l.party_id
+       WHERE p.id = ?`,
+      [id]
+    );
+
+    if (candidateDetails.length === 0) {
+      return res.status(404).json({ message: 'Candidate not found' });
+    }
+
+    res.status(200).json(candidateDetails);
+  } catch (error) {
+    console.error('Error fetching candidate details:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/adminwinners', async (req, res) => {
+  try {
+    const [winners] = await db.query(
+      `SELECT c.id, c.name, c.category, c.votes 
+       FROM candidates c 
+       WHERE c.is_winner = TRUE`
+    );
+    res.status(200).json(winners);
+  } catch (error) {
+    console.error('Error fetching winners:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');
