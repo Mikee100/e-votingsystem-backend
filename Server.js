@@ -1430,6 +1430,87 @@ app.get('/api/adminwinners', async (req, res) => {
   }
 });
 
+/////////////////////////////Announcements//////////////////////////////////////////////////////////
+app.get('/api/announcements', async (req, res) => {
+  try {
+    const [announcements] = await db.query('SELECT * FROM announcements ORDER BY scheduled_date DESC');
+    res.json(announcements);
+  } catch (error) {
+    console.error('Error fetching announcements:', error);
+    res.status(500).json({ error: 'Failed to fetch announcements' });
+  }
+});
+app.post('/api/announcements', upload.single('image'), async (req, res) => {
+  const { title, content, scheduled_date } = req.body;
+  const imagePath = req.file ? req.file.path : null;
+  try {
+    const formattedDate = new Date(scheduled_date).toISOString().slice(0, 19).replace('T', ' ');
+    await db.query('INSERT INTO announcements (title, content, scheduled_date, image_path) VALUES (?, ?, ?, ?)', [title, content, formattedDate, imagePath]);
+    res.status(201).json({ message: 'Announcement added successfully' });
+  } catch (error) {
+    console.error('Error adding announcement:', error);
+    res.status(500).json({ error: 'Failed to add announcement' });
+  }
+});
+
+// Edit an announcement with an image
+app.put('/api/announcements/:id', upload.single('image'), async (req, res) => {
+  const { id } = req.params;
+  const { title, content, scheduled_date } = req.body;
+  const imagePath = req.file ? req.file.path : null;
+  try {
+    const formattedDate = new Date(scheduled_date).toISOString().slice(0, 19).replace('T', ' ');
+    await db.query('UPDATE announcements SET title = ?, content = ?, scheduled_date = ?, image_path = ? WHERE id = ?', [title, content, formattedDate, imagePath, id]);
+    res.status(200).json({ message: 'Announcement updated successfully' });
+  } catch (error) {
+    console.error('Error updating announcement:', error);
+    res.status(500).json({ error: 'Failed to update announcement' });
+  }
+});
+
+
+
+/////////////////////////candidate-stats//////////////////////////////////////////////
+app.get('/api/candidate-stats', async (req, res) => {
+  const { schoolId } = req.query;
+
+  try {
+    const [houseRepStats] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, hr.vote_count
+       FROM candidates c
+       JOIN hostelrep_votes hr ON c.id = hr.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE s.idschools = ?`, [schoolId]
+    );
+
+    const [delegateStats] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, d.vote_count
+       FROM candidates c
+       JOIN delegates_votes d ON c.id = d.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE s.idschools = ?`, [schoolId]
+    );
+
+    const [congresspersonStats] = await db.query(
+      `SELECT c.name, s.schoolname AS school_name, cp.vote_count
+       FROM candidates c
+       JOIN congressperson_votes cp ON c.id = cp.leader_id
+       JOIN schools s ON c.school_id = s.idschools
+       WHERE s.idschools = ?`, [schoolId]
+    );
+
+    res.json({
+      houseRepStats,
+      delegateStats,
+      congresspersonStats,
+    });
+  } catch (error) {
+    console.error('Error fetching candidate stats:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
 app.get('/', (req, res) => {
   res.send('Hello, World!');
 });
