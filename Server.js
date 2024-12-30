@@ -13,6 +13,8 @@ import bodyParser from "body-parser";
 import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const JWT_SECRET='waweru';
 
@@ -43,11 +45,12 @@ app.use(express.json());
 let db;
 (async () => {
   try {
+    // Use environment variables for connection configuration
     db = await mysql.createConnection({
-      host: 'localhost',
-      user: 'root',
-      password: '10028mike.',
-      database: 'evoting_system',
+      host: process.env.DB_HOST,
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
     });
 
     console.log('Connected to MySQL');
