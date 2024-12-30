@@ -4,8 +4,10 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node backend/Server.js",
-  "dev": "nodemon backend/Server.js"
+   "scripts": {
+  "start": "node /opt/render/project/backend/server.js",
+  "dev": "nodemon /opt/render/project/backend/server.js"
+}
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
