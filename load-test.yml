@@ -1,0 +1,9 @@
+config:
+  target: 'http://localhost:3000'  # Your backend URL
+  phases:
+    - duration: 60  # Duration in seconds
+      arrivalRate: 100  # 100 requests per second
+scenarios:
+  - flow:
+      - get:
+          url: "/login"  # Replace with your actual endpoint

@@ -529,6 +529,48 @@ app.get('/candidates', async (req, res) => {
   }
 });
 
+app.get('/api/candidates', async (req, res) => {
+  const { status } = req.query;
+  let isApproved;
+  if (status === 'approved') {
+    isApproved = 1;
+  } else if (status === 'declined') {
+    isApproved = -1;
+  } else {
+    isApproved = 0;
+  }
+
+  try {
+    const [candidates] = await db.query(
+      `SELECT c.id, c.name, d.department_name, c.role, c.is_approved
+       FROM candidates c
+       JOIN departments d ON c.department_id = d.id
+       WHERE c.is_approved = ?`, [isApproved]
+    );
+    res.json(candidates);
+  } catch (error) {
+    console.error('Error fetching candidates:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/candidates/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [candidate] = await db.query('SELECT * FROM candidates WHERE id = ?', [id]);
+    if (candidate.length === 0) {
+      return res.status(404).json({ message: 'Candidate not found' });
+    }
+
+  
+    
+    res.json({ candidate: candidate[0]});
+  } catch (error) {
+    console.error('Error fetching candidate details:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.get('/api/candidates/school/:schoolId', async (req, res) => {
   const { schoolId } = req.params;
 
@@ -579,6 +621,26 @@ app.get('/leaders', async (req, res) => {
 
 
 
+app.get('/vote-details/:voteId', async (req, res) => {
+  const { voteId } = req.params;
+
+  try {
+    const [voteDetails] = await db.query(
+      'SELECT * FROM votes WHERE vote_id = ?',
+      [voteId]
+    );
+
+    if (voteDetails.length > 0) {
+      // You can return additional information such as leader names, etc.
+      res.json(voteDetails[0]);
+    } else {
+      res.status(404).json({ message: 'Vote details not found' });
+    }
+  } catch (err) {
+    console.error('Error fetching vote details:', err);
+    res.status(500).json({ message: 'Failed to fetch vote details' });
+  }
+});
 
 
 app.post('/vote', async (req, res) => {
@@ -725,42 +787,59 @@ app.get('/api/admin/vote-stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
-app.get('/api/admin/vote-stats/school/:schoolId', async (req, res) => {
-  const { schoolId } = req.params;
+app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
+  const { type, id } = req.params;
+  const voteQueries = {
+    school: {
+      congressperson: `
+        SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
+        FROM congressperson_votes AS cv
+        JOIN candidates AS c ON cv.leader_id = c.id
+        WHERE c.school_id = ?
+        GROUP BY cv.leader_id, c.name, c.photo_path
+      `,
+      delegate: `
+        SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
+        FROM delegates_votes AS dv
+        JOIN candidates AS c ON dv.leader_id = c.id
+        WHERE c.school_id = ?
+        GROUP BY dv.leader_id, c.name, c.photo_path
+      `,
+      hostelRep: `
+        SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
+        FROM hostelrep_votes AS hrv
+        JOIN candidates AS c ON hrv.leader_id = c.id
+        WHERE c.school_id = ?
+        GROUP BY hrv.leader_id, c.name, c.photo_path
+      `,
+    },
+    house: {
+      candidates: `
+       SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
+        FROM hostelrep_votes AS hrv
+        JOIN candidates AS c ON hrv.leader_id = c.id
+        WHERE c.school_id = ?
+        GROUP BY hrv.leader_id, c.name, c.photo_path
+      `,
+    },
+  };
 
   try {
-    const congresspersonVotes = `
-      SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
-      FROM congressperson_votes AS cv
-      JOIN candidates AS c ON cv.leader_id = c.id
-      WHERE c.school_id = ?
-      GROUP BY cv.leader_id, c.name, c.photo_path
-    `;
-    
-    const delegateVotes = `
-      SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
-      FROM delegates_votes AS dv
-      JOIN candidates AS c ON dv.leader_id = c.id
-      WHERE c.school_id = ?
-      GROUP BY dv.leader_id, c.name, c.photo_path
-    `;
+    const queries = voteQueries[type];
+    if (!queries) return res.status(400).json({ error: 'Invalid type specified' });
 
-    const hostelRepVotes = `
-      SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
-      FROM hostelrep_votes AS hrv
-      JOIN candidates AS c ON hrv.leader_id = c.id
-      WHERE c.school_id = ?
-      GROUP BY hrv.leader_id, c.name, c.photo_path
-    `;
+    const results = await Promise.all(
+      Object.entries(queries).map(async ([key, query]) => {
+        const [rows] = await db.query(query, [id]);
+        return { [key]: rows };
+      })
+    );
 
-    const [congressResults] = await db.query(congresspersonVotes, [schoolId]);
-    const [delegateResults] = await db.query(delegateVotes, [schoolId]);
-    const [hostelRepResults] = await db.query(hostelRepVotes, [schoolId]);
-
-    res.json({ congressperson: congressResults, delegate: delegateResults, hostelRep: hostelRepResults });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to fetch vote stats for the school' });
+    const data = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
 
@@ -1513,6 +1592,36 @@ app.get('/api/candidate-stats', async (req, res) => {
   }
 });
 
+
+
+
+app.get('/api/presidential-winner', async (req, res) => {
+  try {
+    const [winningParty] = await db.query(`
+      SELECT p.id, p.party_name, COUNT(pv.id) AS voteCount
+      FROM presidential_votes pv
+      JOIN parties p ON pv.party_id = p.id
+      GROUP BY p.id
+      ORDER BY voteCount DESC
+      LIMIT 1
+    `);
+
+    if (winningParty.length === 0) {
+      return res.status(404).json({ message: 'No winning party found' });
+    }
+
+    const [partyLeaders] = await db.query(`
+      SELECT l.name, l.position, l.image
+      FROM leaders l
+      WHERE l.party_id = ?
+    `, [winningParty[0].id]);
+
+    res.json({ party: winningParty[0], leaders: partyLeaders });
+  } catch (error) {
+    console.error('Error fetching presidential winner:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello, World!');

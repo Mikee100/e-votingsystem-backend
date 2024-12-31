@@ -4,10 +4,8 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-   "scripts": {
-  "start": "node /opt/render/project/backend/server.js",
-  "dev": "nodemon /opt/render/project/backend/server.js"
-}
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -23,7 +21,8 @@
     "mysql2": "^3.11.3",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.15",
-    "path": "^0.12.7"
+    "path": "^0.12.7",
+    "react-google-login": "^5.2.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
