@@ -490,39 +490,65 @@ app.get('/userprofile', async (req, res) => {
   }
 });
 
-const getCandidatesBySchool = async (schoolId) => {
+const getCandidatesBySchool = async (schoolId, userEmail) => {
   try {
-    const [candidates] = await db.execute(`
+    // Fetch user hostel first
+    const [user] = await db.execute(`
+      SELECT u.hostel
+      FROM users u
+      WHERE u.email = ?
+    `, [userEmail]);
+
+    const userHostel = user[0]?.hostel || null;
+
+    // Fetch candidates by hostel
+    const [candidatesByHostel] = await db.execute(`
       SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
       FROM candidates c
-      INNER JOIN schools s ON c.school_id = s.idschools
-      WHERE s.idschools = ?
+      WHERE c.hostel = ?
+    `, [userHostel]);
+
+    // Fetch candidates by school_id
+    const [candidatesBySchool] = await db.execute(`
+      SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
+      FROM candidates c
+      WHERE c.school_id = ?
     `, [schoolId]);
 
-    return candidates;
+    console.log('Candidates by Hostel:', candidatesByHostel);
+    console.log('Candidates by School:', candidatesBySchool);
+
+    // Return both sets of candidates
+    return { 
+      candidatesByHostel,
+      candidatesBySchool,
+      userHostel
+    };
+    
   } catch (error) {
-    console.error('Error fetching candidates by school:', error);
+    console.error('Error fetching candidates:', error);
     throw error; // Re-throw error to be caught by the route handler
   }
 };
 
 
 app.get('/candidates', async (req, res) => {
-  const { schoolId } = req.query;
+  const { schoolId, email } = req.query;
 
-  // Check if schoolId is provided
-  if (!schoolId) {
-    return res.status(400).json({ error: 'Missing schoolId parameter' });
+  // Check if schoolId and email are provided
+  if (!schoolId || !email) {
+    return res.status(400).json({ error: 'Missing schoolId or email parameter' });
   }
 
   try {
-    const candidates = await getCandidatesBySchool(schoolId);
+    const { candidatesBySchool, candidatesByHostel } = await getCandidatesBySchool(schoolId, email);
 
-    if (candidates.length === 0) {
+    
+    if (candidatesBySchool.length === 0) {
       return res.json({ message: "No candidates available for your school." });
     }
 
-    res.json({ candidates });
+    res.json({ candidatesBySchool, candidatesByHostel });
   } catch (error) {
     console.error('Error fetching candidates:', error);
     res.status(500).json({ error: 'Failed to fetch candidates' });
@@ -881,43 +907,103 @@ app.get('/api/elections', async (req, res) => {
 
 
 // Example: Create an election
-app.post('/api/elections', async (req, res) => {
-  const { name, start_date, end_date } = req.body;
+const formatDateForMySQL = (date) => {
+  if (!date) {
+    throw new Error("Invalid date");
+  }
+  return new Date(date).toISOString().slice(0, 19).replace("T", " ");
+};
 
-  if (!name || !start_date || !end_date) {
-    return res.status(400).json({ error: 'Missing required fields' });
+// Create a new election
+app.post("/api/elections", async (req, res) => {
+  const { name, start_date, end_date, year } = req.body;
+
+  if (!name || !start_date || !end_date || !year) {
+    return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // Function to format date to MySQL datetime format
-  const formatDateForMySQL = (date) => {
-    if (!date) {
-      throw new Error('Invalid date');
-    }
-    return new Date(date).toISOString().slice(0, 19).replace('T', ' ');
-  };
-
   try {
-    console.log('Received start_date:', start_date);
-    console.log('Received end_date:', end_date);
-
     const formattedStartDate = formatDateForMySQL(start_date);
     const formattedEndDate = formatDateForMySQL(end_date);
 
-    console.log('Formatted start_date:', formattedStartDate);
-    console.log('Formatted end_date:', formattedEndDate);
-
+    // Insert the new election, associating it with the specified year
     const [result] = await db.query(
-      'INSERT INTO elections (name, start_date, end_date) VALUES (?, ?, ?)',
-      [name, formattedStartDate, formattedEndDate]
+      `INSERT INTO elections (name, start_date, end_date, year) VALUES (?, ?, ?, ?)`,
+      [name, formattedStartDate, formattedEndDate, year]
     );
-    res.status(201).json({ message: 'Election created', id: result.insertId });
+    res.status(201).json({ message: "Election created", id: result.insertId });
   } catch (error) {
-    console.error('Error creating election:', error); // Log detailed error
-    res.status(500).json({ error: 'Error creating election' });
+    console.error("Error creating election:", error);
+    res.status(500).json({ error: "Error creating election" });
+  }
+});
+
+app.get("/api/elections", async (req, res) => {
+  const { year } = req.query;
+
+  try {
+    const query = year
+      ? `SELECT * FROM elections WHERE year = ?`
+      : `SELECT * FROM elections`;
+
+    const [rows] = await db.query(query, year ? [year] : []);
+    res.json(rows);
+  } catch (error) {
+    console.error("Error fetching elections:", error);
+    res.status(500).json({ error: "Error fetching elections" });
+  }
+});
+
+// Update election dates
+app.put("/api/elections/:id/dates", async (req, res) => {
+  const { id } = req.params;
+  const { start_date, end_date } = req.body;
+
+  if (!start_date || !end_date) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    const formattedStartDate = formatDateForMySQL(start_date);
+    const formattedEndDate = formatDateForMySQL(end_date);
+
+    await db.query(
+      `UPDATE elections SET start_date = ?, end_date = ? WHERE id = ?`,
+      [formattedStartDate, formattedEndDate, id]
+    );
+
+    res.json({ message: "Election dates updated" });
+  } catch (error) {
+    console.error("Error updating election dates:", error);
+    res.status(500).json({ error: "Error updating election dates" });
   }
 });
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Update election status
 app.put('/api/elections/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body; // 'open' or 'closed'
@@ -927,14 +1013,16 @@ app.put('/api/elections/:id/status', async (req, res) => {
   }
 
   try {
-    await db.query('UPDATE elections SET status = $1 WHERE id = $2', [status, id]);
+    await db.query('UPDATE elections SET status = ? WHERE id = ?', [status, id]);
     res.status(200).json({ message: 'Election status updated successfully' });
   } catch (error) {
+    console.error('Error updating election status:', error);
     res.status(500).json({ error: 'Failed to update election status' });
   }
 });
-// Example: Endpoint to update election dates
-app.put("/api/elections/:id/dates", async (req, res) => {
+
+// Update election dates
+app.put('/api/elections/:id/dates', async (req, res) => {
   const { start_date, end_date } = req.body;
   const electionId = req.params.id;
 
@@ -956,16 +1044,17 @@ app.put("/api/elections/:id/dates", async (req, res) => {
     console.log('Formatted start_date:', formattedStartDate);
     console.log('Formatted end_date:', formattedEndDate);
 
-    const [result] = await db.query(
-      "UPDATE elections SET start_date = ?, end_date = ? WHERE id = ?",
+    await db.query(
+      'UPDATE elections SET start_date = ?, end_date = ? WHERE id = ?',
       [formattedStartDate, formattedEndDate, electionId]
     );
-    res.status(200).json({ message: "Dates updated successfully" });
+    res.status(200).json({ message: 'Dates updated successfully' });
   } catch (error) {
-    console.error("Error updating dates:", error);
-    res.status(500).json({ error: "Failed to update dates" });
+    console.error('Error updating dates:', error);
+    res.status(500).json({ error: 'Failed to update dates' });
   }
 });
+
 
 
 app.get('/api/elections/:id/status', async (req, res) => {
