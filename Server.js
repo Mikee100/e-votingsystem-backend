@@ -391,7 +391,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 
-app.post('/candidate-register', upload.single('photo'), (req, res) => {
+app.post('/candidate-register', upload.single('photo'), async (req, res) => {
   const {
     name,
     admissionNo,
@@ -401,33 +401,44 @@ app.post('/candidate-register', upload.single('photo'), (req, res) => {
     gender,
     motto,
     hostel,
-    inSchool 
+    inSchool,
+    year
   } = req.body;
+
   const photoPath = req.file ? req.file.path : null;
 
-  let inSchoolValue = null; 
+  let inSchoolValue = null;
 
+  // Determine in-school value based on role
   if (role === "House Rep") {
     inSchoolValue = inSchool === 'In-School' || inSchool === 'Out-School' ? inSchool : null;
   } else {
     inSchoolValue = null;
   }
 
-  const sql = `
-    INSERT INTO candidates (
-      name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path, is_approved
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
+  // Dynamically set the schema based on the year
+  const schemaName = `evoting_${year}`; // Example: election_2024
+  const tableName = 'candidates'; // Table name is the same, but it exists in different schemas (one for each year)
 
-  db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath, false], (error, results) => {
-    if (error) {
-      console.error('Error inserting candidate:', error);
-      res.status(500).send('Error inserting candidate');
-      return;
-    }
+  try {
+    // Set the correct database for the query dynamically
+    const sql = `
+      INSERT INTO ${schemaName}.${tableName} (
+        name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path, is_approved
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    // Execute the query to insert the candidate's data
+    await db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath, false]);
+
     res.status(201).send('Candidate registered successfully');
-  });
+  } catch (error) {
+    console.error('Error inserting candidate:', error);
+    res.status(500).send('Error inserting candidate');
+  }
 });
+
+
 app.post('/api/approve-candidate/:id', async (req, res) => {
   const { id } = req.params;
 
@@ -490,39 +501,55 @@ app.get('/userprofile', async (req, res) => {
   }
 });
 
-const getCandidatesBySchool = async (schoolId, userEmail) => {
+const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getFullYear()) => {
   try {
-    // Fetch user hostel first
+
+
+
+    // Set the global schema for the users table (assuming 'evoting_global' is the schema)
+    const globalSchema = 'evoting_system'; // Replace with your global schema name
+
+    // Dynamically set the schema for candidates based on the year (e.g., evoting_2024)
+    const schemaName = `evoting_${year}`;
+    
+    // Fetch user data (including hostel) from the global schema
     const [user] = await db.execute(`
       SELECT u.hostel
-      FROM users u
+      FROM ${globalSchema}.users u
       WHERE u.email = ?
     `, [userEmail]);
 
+    
     const userHostel = user[0]?.hostel || null;
 
-    // Fetch candidates by hostel
+    if (!userHostel) {
+      throw new Error('User does not have a hostel associated');
+    }
+
+    // Fetch candidates for the given year and user hostel from the dynamic schema
     const [candidatesByHostel] = await db.execute(`
       SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
-      FROM candidates c
-      WHERE c.hostel = ?
+      FROM ${schemaName}.candidates c
+      WHERE c.hostel = ? 
     `, [userHostel]);
 
-    // Fetch candidates by school_id
+
+
+    // Fetch candidates by school_id and year from the dynamic schema
     const [candidatesBySchool] = await db.execute(`
       SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
-      FROM candidates c
-      WHERE c.school_id = ?
+      FROM ${schemaName}.candidates c
+      WHERE c.school_id = ? 
     `, [schoolId]);
 
-    console.log('Candidates by Hostel:', candidatesByHostel);
-    console.log('Candidates by School:', candidatesBySchool);
 
-    // Return both sets of candidates
+
+    // Return both sets of candidates for the given year and schema
     return { 
       candidatesByHostel,
       candidatesBySchool,
-      userHostel
+      userHostel,
+      year
     };
     
   } catch (error) {
@@ -530,6 +557,7 @@ const getCandidatesBySchool = async (schoolId, userEmail) => {
     throw error; // Re-throw error to be caught by the route handler
   }
 };
+
 
 
 app.get('/candidates', async (req, res) => {
@@ -599,12 +627,24 @@ app.get('/api/admin/candidates/:id', async (req, res) => {
 
 app.get('/api/candidates/school/:schoolId', async (req, res) => {
   const { schoolId } = req.params;
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
 
   try {
-    const candidates = await getCandidatesBySchool(schoolId);
+    // Query to fetch candidates by school from the dynamic schema
+    const [candidates] = await db.query(
+      `
+      SELECT id, name,admission_no,role,gender,motto, photo_path AS photo
+      FROM ${schemaName}.candidates
+      WHERE school_id = ?
+      `,
+      [schoolId]
+    );
+
     if (candidates.length === 0) {
       return res.status(404).json({ message: "No candidates available for this school." });
     }
+
     res.json({ candidates });
   } catch (error) {
     console.error('Error fetching candidates by school:', error);
@@ -718,57 +758,71 @@ app.get('/votes/tally', async (req, res) => {
 
 
 app.post('/vote/delegate', async (req, res) => {
-  const { leaderId, schoolId } = req.body;
+  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
-    // Increment vote count for the candidate in the delegates_votes table
+    // Dynamically set the schema name
+    const schemaName = `evoting_${year}`;
+    
+    // Insert vote into the delegates_votes table in the specified schema
     await db.query(
-      'INSERT INTO delegates_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
-      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+      `INSERT INTO ${schemaName}.delegates_votes (leader_id, school_id, vote_count) 
+       VALUES (?, ?, 1) 
+       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
       [leaderId, schoolId]
     );
+
     res.json({ success: true });
   } catch (err) {
     console.error('Failed to cast vote for delegate:', err);
-    res.status(500).json({ message: 'Failed to cast vote.' });
+    res.status(500).json({ message: 'Failed to cast vote for delegate.' });
   }
 });
 
 app.post('/vote/congressperson', async (req, res) => {
-  const { leaderId, schoolId } = req.body;
+  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
+    // Dynamically set the schema name
+    const schemaName = `evoting_${year}`;
     
+    // Insert vote into the congressperson_votes table in the specified schema
     await db.query(
-      'INSERT INTO congressperson_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
-      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+      `INSERT INTO ${schemaName}.congressperson_votes (leader_id, school_id, vote_count) 
+       VALUES (?, ?, 1) 
+       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
       [leaderId, schoolId]
     );
+
     res.json({ success: true });
   } catch (err) {
     console.error('Failed to cast vote for congressperson:', err);
-    res.status(500).json({ message: 'Failed to cast vote.' });
+    res.status(500).json({ message: 'Failed to cast vote for congressperson.' });
   }
 });
 
-
-
 app.post('/vote/hostelrep', async (req, res) => {
-  const { leaderId, schoolId } = req.body;
+  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
-    // Increment the vote count for the candidate
-    const [result] = await db.query(
-      'INSERT INTO hostelrep_votes (leader_id, school_id, vote_count) VALUES (?, ?, 1) ' +
-      'ON DUPLICATE KEY UPDATE vote_count = vote_count + 1',
+    // Dynamically set the schema name
+    const schemaName = `evoting_${year}`;
+    
+    // Insert vote into the hostelrep_votes table in the specified schema
+    await db.query(
+      `INSERT INTO ${schemaName}.hostelrep_votes (leader_id, school_id, vote_count) 
+       VALUES (?, ?, 1) 
+       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
       [leaderId, schoolId]
     );
+
     res.json({ success: true });
   } catch (err) {
     console.error('Failed to cast vote for hostel representative:', err);
-    res.status(500).json({ message: 'Failed to cast vote.' });
+    res.status(500).json({ message: 'Failed to cast vote for hostel representative.' });
   }
 });
+
 
 
 
@@ -815,35 +869,38 @@ app.get('/api/admin/vote-stats', async (req, res) => {
 });
 app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
   const { type, id } = req.params;
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
   const voteQueries = {
     school: {
       congressperson: `
         SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
-        FROM congressperson_votes AS cv
-        JOIN candidates AS c ON cv.leader_id = c.id
+        FROM ${schemaName}.congressperson_votes AS cv
+        JOIN ${schemaName}.candidates AS c ON cv.leader_id = c.id
         WHERE c.school_id = ?
         GROUP BY cv.leader_id, c.name, c.photo_path
       `,
       delegate: `
         SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
-        FROM delegates_votes AS dv
-        JOIN candidates AS c ON dv.leader_id = c.id
+        FROM ${schemaName}.delegates_votes AS dv
+        JOIN ${schemaName}.candidates AS c ON dv.leader_id = c.id
         WHERE c.school_id = ?
         GROUP BY dv.leader_id, c.name, c.photo_path
       `,
       hostelRep: `
         SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
-        FROM hostelrep_votes AS hrv
-        JOIN candidates AS c ON hrv.leader_id = c.id
+        FROM ${schemaName}.hostelrep_votes AS hrv
+        JOIN ${schemaName}.candidates AS c ON hrv.leader_id = c.id
         WHERE c.school_id = ?
         GROUP BY hrv.leader_id, c.name, c.photo_path
       `,
     },
     house: {
       candidates: `
-       SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
-        FROM hostelrep_votes AS hrv
-        JOIN candidates AS c ON hrv.leader_id = c.id
+        SELECT c.name AS candidateName, c.photo_path AS photo, hrv.leader_id, SUM(hrv.vote_count) AS voteCount
+        FROM ${schemaName}.hostelrep_votes AS hrv
+        JOIN ${schemaName}.candidates AS c ON hrv.leader_id = c.id
         WHERE c.school_id = ?
         GROUP BY hrv.leader_id, c.name, c.photo_path
       `,
@@ -852,7 +909,9 @@ app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
 
   try {
     const queries = voteQueries[type];
-    if (!queries) return res.status(400).json({ error: 'Invalid type specified' });
+    if (!queries) {
+      return res.status(400).json({ error: 'Invalid type specified' });
+    }
 
     const results = await Promise.all(
       Object.entries(queries).map(async ([key, query]) => {
@@ -864,10 +923,11 @@ app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
     const data = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
     res.json(data);
   } catch (err) {
-    console.error(err);
+    console.error('Error fetching vote stats:', err);
     res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
+
 
 
 
@@ -914,8 +974,9 @@ const formatDateForMySQL = (date) => {
   return new Date(date).toISOString().slice(0, 19).replace("T", " ");
 };
 
-// Create a new election
-app.post("/api/elections", async (req, res) => {
+
+
+app.post('/api/elections', async (req, res) => {
   const { name, start_date, end_date, year } = req.body;
 
   if (!name || !start_date || !end_date || !year) {
@@ -923,20 +984,37 @@ app.post("/api/elections", async (req, res) => {
   }
 
   try {
-    const formattedStartDate = formatDateForMySQL(start_date);
-    const formattedEndDate = formatDateForMySQL(end_date);
+    // Start a transaction
+    await db.query('START TRANSACTION');
 
-    // Insert the new election, associating it with the specified year
+    // Insert the new election
+    const formattedStartDate = new Date(start_date).toISOString().slice(0, 19).replace('T', ' ');
+    const formattedEndDate = new Date(end_date).toISOString().slice(0, 19).replace('T', ' ');
+
     const [result] = await db.query(
       `INSERT INTO elections (name, start_date, end_date, year) VALUES (?, ?, ?, ?)`,
       [name, formattedStartDate, formattedEndDate, year]
     );
-    res.status(201).json({ message: "Election created", id: result.insertId });
+
+    // Call the stored procedure to create the schema and tables
+    await db.query(`CALL CreateNewSchemaWithTables2024(?)`, [year]);
+
+    // Commit the transaction
+    await db.query('COMMIT');
+
+    res.status(201).json({ message: "Election created successfully", id: result.insertId });
   } catch (error) {
     console.error("Error creating election:", error);
+
+    // Rollback the transaction in case of an error
+    await db.query('ROLLBACK');
+
     res.status(500).json({ error: "Error creating election" });
   }
 });
+
+
+
 
 app.get("/api/elections", async (req, res) => {
   const { year } = req.query;
@@ -1549,20 +1627,44 @@ app.post('/api/vote-president', async (req, res) => {
 });
 
 app.get('/api/presidential-standings', async (req, res) => {
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
   try {
+    // Query to fetch presidential standings from the dynamic schema
     const [standings] = await db.query(
-      `SELECT p.id AS party_id, p.party_name, COUNT(v.id) AS votes
-       FROM parties p
-       LEFT JOIN presidential_votes v ON p.id = v.party_id
-       GROUP BY p.id, p.party_name
-       ORDER BY votes DESC`
+      `
+      SELECT 
+        p.id AS party_id, 
+        p.party_name, 
+        COALESCE(COUNT(v.id), 0) AS votes
+      FROM ${schemaName}.parties p
+      LEFT JOIN ${schemaName}.presidential_votes v 
+        ON p.id = v.party_id
+      GROUP BY p.id, p.party_name
+      ORDER BY votes DESC
+      `
     );
-    res.json(standings);
+
+    if (standings.length === 0) {
+      return res.status(404).json({ message: `No presidential standings found for the year ${year}.` });
+    }
+
+    res.json({ year, standings });
   } catch (error) {
     console.error('Error fetching presidential standings:', error);
-    res.status(500).json({ message: 'Server error' });
+
+    // Check for errors related to missing schema
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(400).json({
+        error: `No data available for the year ${year}. Please check the provided year or ensure the schema exists.`,
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to fetch presidential standings' });
   }
 });
+
 
 app.get('/api/president/:id', async (req, res) => {
   const { id } = req.params;
