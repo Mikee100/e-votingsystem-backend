@@ -1814,6 +1814,42 @@ app.get('/api/presidential-winner', async (req, res) => {
   }
 });
 
+
+
+
+////////////////////////////////////////School Managament///////////////////////////////////
+
+
+// PUT /api/admin/schoolmanagement
+app.put('/api/admin/schoolmanagement', async (req, res) => {
+  const updatedSchools = req.body;
+
+  const sql = `
+    INSERT INTO schoolsmanagement (school_id, congressperson, delegate)
+    VALUES ?
+    ON DUPLICATE KEY UPDATE
+      congressperson = VALUES(congressperson),
+      delegate = VALUES(delegate)
+  `;
+
+  const values = updatedSchools.map(school => [
+    school.school_id,  // Ensure this is the correct school_id
+    school.congressperson,
+    school.delegate,
+  ]);
+
+  try {
+    await db.query(sql, [values]);
+    res.status(200).send('Changes saved successfully!');
+  } catch (err) {
+    console.error('Error updating schools:', err);
+    res.status(500).send('Error updating schools');
+  }
+});
+
+
+
+
 app.get('/', (req, res) => {
   res.send('Hello, World!');
 });
