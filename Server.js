@@ -116,6 +116,44 @@ app.get('/houses', async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
+
+app.get('/api/congresspersons', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+
+    const [congresspersons] = await db.query('SELECT * FROM congresspersonroles');
+ 
+    if (congresspersons.length === 0) {
+      return res.status(404).json({ message: 'No schools found' });
+    }
+    
+    res.json(congresspersons);
+  } catch (error) {
+    console.error('Error fetching schools:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+app.get('/api/campuses', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+
+    const [campuses] = await db.query('SELECT * FROM campuses');
+ 
+    if (campuses.length === 0) {
+      return res.status(404).json({ message: 'No schools found' });
+    }
+    
+    res.json(campuses);
+  } catch (error) {
+    console.error('Error fetching schools:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 app.get('/departments/:schoolId', async (req, res) => {
     const { schoolId } = req.params;
   
@@ -267,11 +305,13 @@ app.post('/login', async (req, res) => {
   try {
     // Fetch user from the database
     const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
+
     if (user.length === 0) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
     const existingUser = user[0];
+
     // Check if user is verified
     if (!existingUser.isVerified) {
       return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
@@ -287,7 +327,7 @@ app.post('/login', async (req, res) => {
     const token = jwt.sign({ userId: existingUser.id, email: existingUser.email, role: existingUser.role }, JWT_SECRET, { expiresIn: '24h' });
 
     // Send token and role back to the client
-    return res.status(200).json({ message: 'Login successful', token, role: existingUser.role });
+    return res.status(200).json({ message: 'Login successful', token, role: existingUser.role, userId: existingUser.id });
   } catch (error) {
     console.error('Error during login:', error.message);
     return res.status(500).json({ message: 'Server error' });
@@ -398,11 +438,15 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
     school,
     department,
     role,
+    congresspersonType,
     gender,
     motto,
     hostel,
     inSchool,
-    year
+    year,
+    residentStatus,
+    disabilityStatus,
+    campus
   } = req.body;
 
   const photoPath = req.file ? req.file.path : null;
@@ -424,12 +468,12 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
     // Set the correct database for the query dynamically
     const sql = `
       INSERT INTO ${schemaName}.${tableName} (
-        name, admission_no, school_id, department_id, role, gender, motto, hostel, in_school, photo_path, is_approved
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        name, admission_no, school_id, department_id, role, congressperson_type, gender, motto, hostel, in_school, photo_path, is_approved, resident_status, disability_status, campus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     // Execute the query to insert the candidate's data
-    await db.query(sql, [name, admissionNo, school, department, role, gender, motto, hostel, inSchoolValue, photoPath, false]);
+    await db.query(sql, [name, admissionNo, school, department, role, congresspersonType, gender, motto, hostel, inSchoolValue, photoPath, false, residentStatus, disabilityStatus, campus]);
 
     res.status(201).send('Candidate registered successfully');
   } catch (error) {
@@ -1587,9 +1631,7 @@ app.get('/api/all/presidential-candidates', async (req, res) => {
 });
 
 app.post('/api/vote-president', async (req, res) => {
-  const { email, partyId } = req.body;
-
-  console.log(`\nReceived POST /api/vote-president request:`, req.body);
+  const { email, partyId, userId } = req.body;
 
   if (!email || !partyId) {
     console.error('Error: Missing email or partyId in request body.');
@@ -1599,11 +1641,19 @@ app.post('/api/vote-president', async (req, res) => {
   try {
     console.log(`User attempting to vote: { email: ${email}, partyId: ${partyId} }`);
 
-    // Check if user has already voted for any party (i.e., only one vote per user allowed)
+    // Generate an anonymous ID by hashing the email and partyId with a secret key
+    const secretKey = process.env.SECRET_KEY || 'your-secret-key'; // Use an environment variable for the secret key
+    const hash = crypto.createHmac('sha256', secretKey)
+                       .update(`${email}:${partyId}`)
+                       .digest('hex');
+    const anonymousId = hash;
+
+    // Check if an anonymous ID already exists in the database
     const [existingVote] = await db.query(
-      'SELECT * FROM presidential_votes WHERE email = ?',
-      [email]
+      'SELECT * FROM presidential_votes WHERE anonymous_id = ?',
+      [anonymousId]
     );
+
     console.log('Existing vote:', existingVote);
 
     if (existingVote.length > 0) {
@@ -1611,13 +1661,12 @@ app.post('/api/vote-president', async (req, res) => {
       return res.status(400).json({ message: 'You have already voted for a president.' });
     }
 
-    // Record the vote
-    const [insertResult] = await db.query(
-      'INSERT INTO presidential_votes (email, party_id) VALUES (?, ?)',
-      [email, partyId]
+    // Record the vote with the anonymous ID
+    await db.query(
+      'INSERT INTO presidential_votes (party_id, anonymous_id, user_id) VALUES (?, ?, ?)', 
+      [partyId, anonymousId, userId]
     );
-
-    console.log('Vote successfully recorded:', insertResult);
+  
 
     return res.status(200).json({ message: 'Your vote has been recorded successfully.' });
   } catch (error) {
@@ -1625,6 +1674,28 @@ app.post('/api/vote-president', async (req, res) => {
     return res.status(500).json({ message: 'An error occurred while processing your vote.' });
   }
 });
+app.post('/api/admin/lookup-voter', async (req, res) => {
+  const { anonymousId } = req.body;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT u.email, u.name, p.party_id, p.anonymous_id
+       FROM presidential_votes p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.anonymous_id = ?`, [anonymousId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Vote not found or anonymous ID is invalid.' });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error fetching voter details.' });
+  }
+});
+
 
 app.get('/api/presidential-standings', async (req, res) => {
   const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
@@ -1818,34 +1889,62 @@ app.get('/api/presidential-winner', async (req, res) => {
 
 
 ////////////////////////////////////////School Managament///////////////////////////////////
+app.get('/api/schoolsmanagement', async (req, res) => {
+  try {
+    const query = `
+      SELECT sm.school_id, sm.congressperson, sm.delegate, s.schoolname
+      FROM schoolsmanagement sm
+      JOIN schools s ON sm.school_id = s.idschools
+    `;
+    
+    // Await the query result
+    const [results] = await db.query(query);
+
+    // Send the results as JSON
+    res.json(results); 
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    res.status(500).json({ message: 'Error fetching data' });
+  }
+});
 
 
 // PUT /api/admin/schoolmanagement
-app.put('/api/admin/schoolmanagement', async (req, res) => {
-  const updatedSchools = req.body;
-
-  const sql = `
-    INSERT INTO schoolsmanagement (school_id, congressperson, delegate)
-    VALUES ?
-    ON DUPLICATE KEY UPDATE
-      congressperson = VALUES(congressperson),
-      delegate = VALUES(delegate)
-  `;
-
-  const values = updatedSchools.map(school => [
-    school.school_id,  // Ensure this is the correct school_id
-    school.congressperson,
-    school.delegate,
-  ]);
-
+app.put('/api/admin/schoolsmanagement', async (req, res) => {
+  const updatedSchools = req.body;  // Get updated data from the client
+  
   try {
-    await db.query(sql, [values]);
+    for (const school of updatedSchools) {
+      // First, check if the school exists in the schoolsmanagement table
+      const [existingSchool] = await db.execute(
+        'SELECT * FROM schoolsmanagement WHERE school_id = ?',
+        [school.school_id]
+      );
+
+      // If school doesn't exist, insert it; else update it
+      if (existingSchool.length === 0) {
+        // Insert the new school data with default values for congressperson and delegate
+        await db.execute(
+          'INSERT INTO schoolsmanagement (school_id, congressperson, delegate) VALUES (?, ?, ?)',
+          [school.school_id, school.congressperson || 0, school.delegate || 0]
+        );
+      } else {
+        // Update the existing school data
+        await db.execute(
+          'UPDATE schoolsmanagement SET congressperson = ?, delegate = ? WHERE school_id = ?',
+          [school.congressperson || 0, school.delegate || 0, school.school_id]
+        );
+      }
+    }
+
     res.status(200).send('Changes saved successfully!');
   } catch (err) {
     console.error('Error updating schools:', err);
     res.status(500).send('Error updating schools');
   }
 });
+
+
 
 
 
