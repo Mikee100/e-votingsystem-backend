@@ -182,6 +182,7 @@ app.get('/departments/:schoolId', async (req, res) => {
     },
   });
 
+
   app.post('/register', async (req, res) => {
     console.log('Incoming registration request:', req.body);
   
@@ -190,12 +191,15 @@ app.get('/departments/:schoolId', async (req, res) => {
       admissionno,
       email,
       password,
-      dob,
+   
       gender,
       department_id,
       school_id,
       inSchool,
       house_id,
+      campus,
+      internationalStudent,
+      disabled,
     } = req.body;
   
     if (
@@ -203,11 +207,14 @@ app.get('/departments/:schoolId', async (req, res) => {
       !admissionno ||
       !email ||
       !password ||
-      !dob ||
+
       !gender ||
       !department_id ||
       !school_id ||
       !inSchool ||
+      !campus||
+      !internationalStudent ||
+      !disabled ||
       (inSchool === 'In-School' && !house_id)
     ) {
       console.log('Validation failed: Missing required fields');
@@ -218,33 +225,39 @@ app.get('/departments/:schoolId', async (req, res) => {
   
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
-  
+
+      const campusValue = campus === 'Yes' ? 1 : 0;
+      const intlStudentValue = internationalStudent === 'Yes' ? 1 : 0;
+      const disabledValue = disabled === 'Yes' ? 1 : 0;
       
       const verificationToken = crypto.randomBytes(32).toString('hex');
   
       
     
       const result = await db.query(
-        'INSERT INTO users (name, admissionno, email, password, dob, gender, department, school, inSchool, hostel, verificationToken, isVerified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, admissionno, email, password, gender, department, school, inSchool, hostel, verificationToken, isVerified,campus, internationalstudent, disabled) VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name,
           admissionno,
           email,
           hashedPassword,
-          dob,
+        
           gender,
           department_id,
           school_id,
           inSchool,
           house_id || null,
           verificationToken,
+          campusValue,
+          disabledValue,
+          intlStudentValue,
           false, 
         ]
       );
   
       const newUserId = result[0].insertId;
       console.log('New user inserted with ID:', newUserId);
-      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' }); // Token valid for 1 hour
+      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '24h' }); // Token valid for 1 hour
 
    
     const verificationUrl = `http://localhost:5173/verify?token=${encodeURIComponent(token)}`;
@@ -266,6 +279,7 @@ app.get('/departments/:schoolId', async (req, res) => {
       return res.status(500).json({ message: 'Server error' });
     }
   });
+  
 
   app.get('/verify', async (req, res) => {
   const { token } = req.query;
@@ -544,6 +558,74 @@ app.get('/userprofile', async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
+
+app.get('/api/fetchCandidatesByCampus', async (req, res) => {
+  const email = req.query.email;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+  console.log('Incoming request for /api/fetchCandidatesByCampus');
+  console.log('Email received:', email);
+
+  if (!email) {
+    console.log('Error: Email is missing');
+    return res.status(400).send('Email is required');
+  }
+
+  try {
+    // Step 1: Fetch user data
+    const userQuery = `
+      SELECT internationalstudent, campus, disabled
+      FROM users
+      WHERE email = ?;
+    `;
+    const [userData] = await db.execute(userQuery, [email]);
+
+    if (userData.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(404).send('User not found');
+    }
+
+    console.log('User data fetched:', userData);
+    const { campus, disabled } = userData[0];
+    console.log('User campus number:', campus);
+    console.log('User disability status:', disabled);
+
+    // Step 2: Fetch candidates by campus
+    const candidatesQuery = `
+      SELECT *
+      FROM ${schemaName}.candidates
+      WHERE campus = ?;
+    `;
+
+    console.log('Querying candidates for campus number:', campus);
+
+    const [candidates] = await db.execute(candidatesQuery, [campus]);
+
+    console.log('Candidates fetched:', candidates);
+
+    if (candidates.length > 0) {
+      const response = {
+        candidates,
+        userDisabilityStatus: disabled
+      };
+      console.log('Sending candidates and disability status response:', response);
+      return res.json(response);
+    } else {
+      console.log('No candidates found for campus:', campus);
+      return res.status(404).send('No candidates found for the specified campus');
+    }
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    return res.status(500).send('Error fetching data');
+  }
+});
+
+
+
+
+
 
 const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getFullYear()) => {
   try {
@@ -1945,6 +2027,58 @@ app.put('/api/admin/schoolsmanagement', async (req, res) => {
 });
 
 
+
+///////////////////////////////////////////////////////
+app.get("/campuses", async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT * FROM campuses");
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error("Error fetching campuses:", err);
+    res.status(500).json({ message: "Error fetching campuses" });
+  }
+});
+
+// Update campus population and representatives
+app.put("/campuses/:id", async (req, res) => {
+  const { id } = req.params;
+  const { population } = req.body;
+
+  if (typeof population !== "number") {
+    return res.status(400).json({ message: "Invalid population value" });
+  }
+
+  try {
+    // Determine representatives based on population
+    let representatives = [];
+    if (population < 300) {
+      representatives = ["Campus Congressperson"];
+    } else if (population <= 500) {
+      representatives = ["Male Campus Congressperson", "Female Campus Congressperson"];
+    } else {
+      representatives = [
+        "Campus Representative",
+        "Male Campus Congressperson",
+        "Female Campus Congressperson",
+      ];
+    }
+
+    // Update the database
+    const [result] = await db.query(
+      "UPDATE campuses SET population = ?, representatives = ? WHERE id = ?",
+      [population, JSON.stringify(representatives), id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Campus not found" });
+    }
+
+    res.status(200).json({ message: "Campus updated successfully", representatives });
+  } catch (err) {
+    console.error("Error updating campus:", err);
+    res.status(500).json({ message: "Error updating campus" });
+  }
+});
 
 
 
