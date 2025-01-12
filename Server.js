@@ -191,77 +191,52 @@ app.get('/departments/:schoolId', async (req, res) => {
       admissionno,
       email,
       password,
-   
       gender,
       department_id,
       school_id,
-      inSchool,
+      residency_status,
       house_id,
+      off_campus_address,
       campus,
       internationalStudent,
       disabled,
     } = req.body;
   
     if (
-      !name ||
-      !admissionno ||
-      !email ||
-      !password ||
-
-      !gender ||
-      !department_id ||
-      !school_id ||
-      !inSchool ||
-      !campus||
-      !internationalStudent ||
-      !disabled ||
-      (inSchool === 'In-School' && !house_id)
+      !name || !admissionno || !email || !password || !gender ||
+      !department_id || !school_id || !residency_status || !campus ||
+      !internationalStudent || !disabled ||
+      (residency_status === 'Resident' && !house_id) ||
+      (residency_status === 'Non-Resident' && !off_campus_address)
     ) {
       console.log('Validation failed: Missing required fields');
-      return res.status(400).json({ message: 'All fields are required' });
+      return res.status(400).json({ message: 'Validation failed: Missing required fields' });
     }
   
     try {
-  
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
-
+  
       const campusValue = campus === 'Yes' ? 1 : 0;
       const intlStudentValue = internationalStudent === 'Yes' ? 1 : 0;
       const disabledValue = disabled === 'Yes' ? 1 : 0;
-      
       const verificationToken = crypto.randomBytes(32).toString('hex');
   
-      
-    
       const result = await db.query(
-        'INSERT INTO users (name, admissionno, email, password, gender, department, school, inSchool, hostel, verificationToken, isVerified,campus, internationalstudent, disabled) VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, admissionno, email, password, gender, department, school, residency_status, hostel, off_campus_address, verificationToken, isVerified, campus, internationalstudent, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
-          name,
-          admissionno,
-          email,
-          hashedPassword,
-        
-          gender,
-          department_id,
-          school_id,
-          inSchool,
-          house_id || null,
-          verificationToken,
-          campusValue,
-          disabledValue,
-          intlStudentValue,
-          false, 
+          name, admissionno, email, hashedPassword, gender, department_id,
+          school_id, residency_status, house_id || null, off_campus_address || null,
+          verificationToken, false, campusValue, intlStudentValue, disabledValue
         ]
       );
   
-      const newUserId = result[0].insertId;
+      const newUserId = result.insertId;
       console.log('New user inserted with ID:', newUserId);
-      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '24h' }); // Token valid for 1 hour
-
-   
-    const verificationUrl = `http://localhost:5173/verify?token=${encodeURIComponent(token)}`;
- 
+  
+      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '24h' });
+      const verificationUrl = `http://localhost:5173/verify?token=${encodeURIComponent(token)}`;
+  
       const mailOptions = {
         from: 'mikekariuki10028@gmail.com',
         to: email,
