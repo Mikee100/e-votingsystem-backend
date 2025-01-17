@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import moment from 'moment';
 import cron  from 'node-cron';
 import bodyParser from "body-parser";
-
+import util from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
@@ -198,13 +198,15 @@ app.get('/departments/:schoolId', async (req, res) => {
       house_id,
       off_campus_address,
       campus,
+      educationLevel,
+      studentType,
       internationalStudent,
       disabled,
     } = req.body;
   
     if (
       !name || !admissionno || !email || !password || !gender ||
-      !department_id || !school_id || !residency_status || !campus ||
+      !department_id || !school_id || !residency_status || !campus || !educationLevel || !studentType||
       !internationalStudent || !disabled ||
       (residency_status === 'Resident' && !house_id) ||
       (residency_status === 'Non-Resident' && !off_campus_address)
@@ -223,11 +225,11 @@ app.get('/departments/:schoolId', async (req, res) => {
       const verificationToken = crypto.randomBytes(32).toString('hex');
   
       const result = await db.query(
-        'INSERT INTO users (name, admissionno, email, password, gender, department, school, residency_status, hostel, off_campus_address, verificationToken, isVerified, campus, internationalstudent, disabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, admissionno, email, password, gender, department, school, residency_status, hostel, off_campus_address, verificationToken, isVerified, campus, internationalstudent, disabled,student_type,education_level) VALUES (?, ?, ?, ?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name, admissionno, email, hashedPassword, gender, department_id,
           school_id, residency_status, house_id || null, off_campus_address || null,
-          verificationToken, false, campusValue, intlStudentValue, disabledValue
+          verificationToken, false, campusValue, intlStudentValue, disabledValue, studentType, educationLevel
         ]
       );
   
@@ -431,7 +433,7 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
     gender,
     motto,
     hostel,
-    inSchool,
+
     year,
     residentStatus,
     disabilityStatus,
@@ -440,29 +442,15 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
 
   const photoPath = req.file ? req.file.path : null;
 
-  let inSchoolValue = null;
-
-  // Determine in-school value based on role
-  if (role === "House Rep") {
-    inSchoolValue = inSchool === 'In-School' || inSchool === 'Out-School' ? inSchool : null;
-  } else {
-    inSchoolValue = null;
-  }
-
-  // Dynamically set the schema based on the year
-  const schemaName = `evoting_${year}`; // Example: election_2024
-  const tableName = 'candidates'; // Table name is the same, but it exists in different schemas (one for each year)
 
   try {
-    // Set the correct database for the query dynamically
     const sql = `
-      INSERT INTO ${schemaName}.${tableName} (
-        name, admission_no, school_id, department_id, role, congressperson_type, gender, motto, hostel, in_school, photo_path, is_approved, resident_status, disability_status, campus
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO evoting_${year}.candidates (
+        name, admission_no, school_id, department_id, role, congressperson_type, gender, motto, hostel,  photo_path, is_approved, resident_status, disability_status, campus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
     `;
 
-    // Execute the query to insert the candidate's data
-    await db.query(sql, [name, admissionNo, school, department, role, congresspersonType, gender, motto, hostel, inSchoolValue, photoPath, false, residentStatus, disabilityStatus, campus]);
+    await db.query(sql, [name, admissionNo, school, department, role, congresspersonType, gender, motto, hostel,  photoPath, false, residentStatus, disabilityStatus, campus]);
 
     res.status(201).send('Candidate registered successfully');
   } catch (error) {
@@ -540,8 +528,6 @@ app.get('/api/fetchCandidatesByCampus', async (req, res) => {
   const year = new Date().getFullYear();
   const schemaName = `evoting_${year}`;
 
-  console.log('Incoming request for /api/fetchCandidatesByCampus');
-  console.log('Email received:', email);
 
   if (!email) {
     console.log('Error: Email is missing');
@@ -551,7 +537,69 @@ app.get('/api/fetchCandidatesByCampus', async (req, res) => {
   try {
     // Step 1: Fetch user data
     const userQuery = `
-      SELECT internationalstudent, campus, disabled
+      SELECT internationalstudent, campus, disabled,residency_status
+      FROM users
+      WHERE email = ?;
+    `;
+    const [userData] = await db.execute(userQuery, [email]);
+
+    
+
+    if (userData.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(404).send('User not found');
+    }
+
+
+    const { campus, disabled,residency_status } = userData[0];
+
+    
+    
+    // Step 2: Fetch candidates by campus
+    const candidatesQuery = `
+      SELECT *
+      FROM ${schemaName}.candidates
+      WHERE campus = ?;
+    `;
+
+
+
+    const [candidates] = await db.execute(candidatesQuery, [campus],[disabled],[residency_status]);
+
+   
+  
+    if (candidates.length > 0) {
+      const response = {
+        candidates,
+        userDisabilityStatus: disabled
+      };
+     
+      return res.json(response);
+    } else {
+      console.log('No candidates found for campus:', campus);
+      return res.status(404).send('No candidates found for the specified campus');
+    }
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    return res.status(500).send('Error fetching data');
+  }
+});
+
+
+app.get('/api/getCongressPeopleByStudentType', async (req, res) => {
+  const email = req.query.email;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+  if (!email) {
+    console.log('Error: Email is missing');
+    return res.status(400).send('Email is required');
+  }
+
+  try {
+    // Step 1: Fetch user data
+    const userQuery = `
+      SELECT student_type
       FROM users
       WHERE email = ?;
     `;
@@ -562,35 +610,212 @@ app.get('/api/fetchCandidatesByCampus', async (req, res) => {
       return res.status(404).send('User not found');
     }
 
-    console.log('User data fetched:', userData);
-    const { campus, disabled } = userData[0];
-    console.log('User campus number:', campus);
-    console.log('User disability status:', disabled);
+    const { student_type } = userData[0];
+ 
+    // Step 2: Fetch congressperson_type ID from congresspersonrole table
+    const roleQuery = `
+      SELECT id
+      FROM congresspersonroles
+      WHERE congressname LIKE CONCAT('%', ?, '%');
+    `;
+    const [roleData] = await db.execute(roleQuery, [student_type]);
 
+    if (roleData.length === 0) {
+      console.log('No congressperson role found for student_type:', student_type);
+      return res.status(404).send('No congressperson role found for the specified student type');
+    }
+
+    const { id: congresspersonTypeId } = roleData[0];
+   
+
+    // Step 3: Fetch congresspeople by congressperson_type ID
+    const congressPeopleQuery = `
+      SELECT *
+      FROM ${schemaName}.candidates
+      WHERE congressperson_type = ?;
+    `;
+    const [congressPeople] = await db.execute(congressPeopleQuery, [congresspersonTypeId]);
+
+    if (congressPeople.length > 0) {
+      return res.json({ congressPeople });
+    } else {
+      console.log('No congresspeople found for congressperson_type ID:', congresspersonTypeId);
+      return res.status(404).send('No congresspeople found for the specified congressperson type');
+    }
+
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    return res.status(500).send('Error fetching data');
+  }
+});
+
+
+app.get('/api/fetchCandidatesByResidency', async (req, res) => {
+  const email = req.query.email;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+
+  if (!email) {
+    console.log('Error: Email is missing');
+    return res.status(400).send('Email is required');
+  }
+
+  try {
+    // Step 1: Fetch user data
+    const userQuery = `
+      SELECT residency_status
+      FROM users
+      WHERE email = ?;
+    `;
+    const [userData] = await db.execute(userQuery, [email]);
+
+    
+
+    if (userData.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(404).send('User not found');
+    }
+
+
+    const { residency_status } = userData[0];
+
+    
+    
     // Step 2: Fetch candidates by campus
     const candidatesQuery = `
       SELECT *
       FROM ${schemaName}.candidates
-      WHERE campus = ?;
+      WHERE resident_status = ?;
     `;
 
-    console.log('Querying candidates for campus number:', campus);
 
-    const [candidates] = await db.execute(candidatesQuery, [campus]);
 
-    console.log('Candidates fetched:', candidates);
+    const [Residentcandidates] = await db.execute(candidatesQuery,[residency_status]);
 
-    if (candidates.length > 0) {
+   
+  
+    if (Residentcandidates.length > 0) {
       const response = {
-        candidates,
-        userDisabilityStatus: disabled
+        Residentcandidates
       };
-      console.log('Sending candidates and disability status response:', response);
+     
       return res.json(response);
     } else {
       console.log('No candidates found for campus:', campus);
       return res.status(404).send('No candidates found for the specified campus');
     }
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    return res.status(500).send('Error fetching data');
+  }
+});
+
+
+app.get('/api/fetchCandidatesByDisability', async (req, res) => {
+  const email = req.query.email;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+
+  if (!email) {
+    console.log('Error: Email is missing');
+    return res.status(400).send('Email is required');
+  }
+
+  try {
+    // Step 1: Fetch user data
+    const userQuery = `
+      SELECT disabled
+      FROM users
+      WHERE email = ?;
+    `;
+    const [userData] = await db.execute(userQuery, [email]);
+
+    
+
+    if (userData.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(404).send('User not found');
+    }
+
+
+    const { disabled } = userData[0];
+
+    
+    
+    // Step 2: Fetch candidates by campus
+    const candidatesQuery = `
+      SELECT *
+      FROM ${schemaName}.candidates
+      WHERE disability_status = ?;
+    `;
+
+
+
+    const [Disabilitycandidates] = await db.execute(candidatesQuery,[disabled]);
+
+   
+  
+    if (Disabilitycandidates.length > 0) {
+      const response = {
+        Disabilitycandidates
+      };
+     
+      return res.json(response);
+    } else {
+      
+      return res.status(404).send('No candidates found for the specified campus');
+    }
+  } catch (err) {
+    console.error('Error fetching data:', err);
+    return res.status(500).send('Error fetching data');
+  }
+});
+
+app.get('/api/getCongressPeopleByInternational', async (req, res) => {
+  const email = req.query.email;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+  if (!email) {
+    console.log('Error: Email is missing');
+    return res.status(400).send('Email is required');
+  }
+
+  try {
+    // Step 1: Fetch user data
+    const userQuery = `
+      SELECT internationalstudent
+      FROM users
+      WHERE email = ?;
+    `;
+    const [userData] = await db.execute(userQuery, [email]);
+
+    if (userData.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(404).send('User not found');
+    }
+
+    const { internationalstudent } = userData[0];
+
+    // Mapping internationalstudent value to the role ID// Replace `someOtherId` with the correct ID for non-international students
+
+    // Step 3: Fetch congresspeople by congressperson_type ID
+    const congressPeopleQuery = `
+      SELECT *
+      FROM ${schemaName}.candidates
+      WHERE congressperson_type = ?;
+    `;
+    const [congressPeople] = await db.execute(congressPeopleQuery);
+
+    if (congressPeople.length > 0) {
+      return res.json({ congressPeople });
+    } else {
+      console.log('No congresspeople found for congressperson_type ID:', roleId);
+      return res.status(404).send('No congresspeople found for the specified congressperson type');
+    }
+
   } catch (err) {
     console.error('Error fetching data:', err);
     return res.status(500).send('Error fetching data');
@@ -604,13 +829,7 @@ app.get('/api/fetchCandidatesByCampus', async (req, res) => {
 
 const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getFullYear()) => {
   try {
-
-
-
-    // Set the global schema for the users table (assuming 'evoting_global' is the schema)
     const globalSchema = 'evoting_system'; // Replace with your global schema name
-
-    // Dynamically set the schema for candidates based on the year (e.g., evoting_2024)
     const schemaName = `evoting_${year}`;
     
     // Fetch user data (including hostel) from the global schema
@@ -620,21 +839,18 @@ const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getF
       WHERE u.email = ?
     `, [userEmail]);
 
-    
     const userHostel = user[0]?.hostel || null;
 
-    if (!userHostel) {
-      throw new Error('User does not have a hostel associated');
+    let candidatesByHostel = [];
+
+    // Only fetch candidates by hostel if the user has a hostel associated
+    if (userHostel) {
+      [candidatesByHostel] = await db.execute(`
+        SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
+        FROM ${schemaName}.candidates c
+        WHERE c.hostel = ? 
+      `, [userHostel]);
     }
-
-    // Fetch candidates for the given year and user hostel from the dynamic schema
-    const [candidatesByHostel] = await db.execute(`
-      SELECT c.id, c.name, c.admission_no, c.role, c.gender, c.motto, c.photo_path
-      FROM ${schemaName}.candidates c
-      WHERE c.hostel = ? 
-    `, [userHostel]);
-
-
 
     // Fetch candidates by school_id and year from the dynamic schema
     const [candidatesBySchool] = await db.execute(`
@@ -643,9 +859,7 @@ const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getF
       WHERE c.school_id = ? 
     `, [schoolId]);
 
-
-
-    // Return both sets of candidates for the given year and schema
+    // Return both sets of candidates, userHostel, and year
     return { 
       candidatesByHostel,
       candidatesBySchool,
@@ -2054,6 +2268,112 @@ app.put("/campuses/:id", async (req, res) => {
     res.status(500).json({ message: "Error updating campus" });
   }
 });
+
+
+app.post('/api/vote', async (req, res) => {
+  const { email, candidateId, candidateType } = req.body;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+  if (!email || !candidateId || !candidateType) {
+      return res.status(400).json({ error: 'All fields are required' });
+  }
+
+  try {
+      // Check if the user has already voted for this candidate
+      const [existingVote] = await db.execute(
+          `SELECT * FROM ${schemaName}.full_votes WHERE user_email = ? AND candidate_id = ?`,
+          [email, candidateId]
+      );
+
+      if (existingVote.length > 0) {
+          return res.status(400).json({ error: 'You have already voted for this candidate' });
+      }
+
+      // Insert the vote
+      const query = `INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) VALUES (?, ?, ?)`;
+      await db.execute(query, [email, candidateId, candidateType]);
+
+      res.status(200).json({ message: 'Vote cast successfully' });
+  } catch (error) {
+      console.error('Error casting vote:', error);
+      res.status(500).json({ error: 'Failed to cast vote' });
+  }
+});
+
+
+app.get('/api/congressperson', async(req,res) => {
+  try{
+    const [congressroles] = await db.query('SELECT * FROM congresspersonroles');
+
+    res.json(congressroles)
+  }catch(error){
+    console.error('Error')
+    
+  }
+} )
+
+
+app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => {
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+  const { id } = req.params;
+  console.log('Received candidateType ID:', id);  // Debugging log
+
+  const roleQuery = 'SELECT congressname FROM congresspersonroles WHERE id = ?';
+  const voteQuery = `
+    SELECT 
+      fv.candidate_id, 
+      c.name, 
+      fv.candidate_type, 
+      COUNT(*) as vote_count 
+    FROM 
+      ${schemaName}.full_votes fv
+    JOIN 
+      ${schemaName}.candidates c ON fv.candidate_id = c.id
+    WHERE 
+      fv.candidate_type = ? 
+    GROUP BY 
+      fv.candidate_id, 
+      fv.candidate_type, 
+      c.name 
+    ORDER BY 
+      vote_count DESC;
+  `;
+
+  try {
+    console.log('Executing role query...');  // Debugging log
+
+    // Fetch the candidate type name
+    const [roleResults] = await db.query(roleQuery, [id]);
+    console.log('Role Query executed successfully, results:', roleResults);  // Debugging log
+
+    if (roleResults.length === 0) {
+      console.warn('Candidate type not found for ID:', id);  // Debugging log
+      return res.status(404).send({ message: 'Candidate type not found' });
+    }
+
+    const candidateTypeName = roleResults[0].congressname;
+    console.log('Candidate type name:', candidateTypeName);  // Debugging log
+
+    console.log('Executing vote query...');  // Debugging log
+
+    // Fetch the vote statistics
+    const [voteResults] = await db.query(voteQuery, [candidateTypeName]);
+    console.log('Vote Query executed successfully, results:', voteResults);  // Debugging log
+
+    res.json(voteResults);
+
+  } catch (err) {
+    console.error('Database Query Error:', err);  // Debugging log
+    res.status(500).send(err);
+  }
+});
+
+
+
+
 
 
 
