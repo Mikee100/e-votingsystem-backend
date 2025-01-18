@@ -2362,7 +2362,7 @@ app.post('/api/vote', async (req, res) => {
           return res.status(400).json({ error: 'You have already voted for this candidate' });
       }
 
-      // Insert the vote
+      
       const query = `INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) VALUES (?, ?, ?)`;
       await db.execute(query, [email, candidateId, candidateType]);
 
@@ -2395,24 +2395,26 @@ app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => 
 
   const roleQuery = 'SELECT congressname FROM congresspersonroles WHERE id = ?';
   const voteQuery = `
-    SELECT 
-      fv.candidate_id, 
-      c.name, 
-      fv.candidate_type, 
-      COUNT(*) as vote_count 
-    FROM 
-      ${schemaName}.full_votes fv
-    JOIN 
-      ${schemaName}.candidates c ON fv.candidate_id = c.id
-    WHERE 
-      fv.candidate_type = ? 
-    GROUP BY 
-      fv.candidate_id, 
-      fv.candidate_type, 
-      c.name 
-    ORDER BY 
-      vote_count DESC;
-  `;
+  SELECT 
+    fv.candidate_id, 
+    c.name AS candidate_name, 
+    fv.candidate_type, 
+    COUNT(*) AS vote_count
+  FROM 
+    ${schemaName}.full_votes fv
+  JOIN 
+    ${schemaName}.candidates c ON fv.candidate_id = c.id
+  WHERE 
+    fv.candidate_type = ? 
+  GROUP BY 
+    fv.candidate_id, 
+    fv.candidate_type, 
+    c.name
+  ORDER BY 
+    vote_count DESC;
+`;
+
+
 
   try {
     console.log('Executing role query...');  // Debugging log
