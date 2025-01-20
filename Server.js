@@ -547,7 +547,7 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
       return res.status(404).send('User not found');
     }
 
-    const { campus } = userData[0];
+    const { campus: campusId } = userData[0];
 
     // Step 2: Fetch the campus name using the campus ID
     const campusQuery = `
@@ -555,10 +555,10 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
       FROM campuses
       WHERE id = ?;
     `;
-    const [campusData] = await db.execute(campusQuery, [campus]);
+    const [campusData] = await db.execute(campusQuery, [campusId]);
 
     if (campusData.length === 0) {
-      console.log('No campus found with ID:', campus);
+      console.log('No campus found with ID:', campusId);
       return res.status(404).send('Campus not found');
     }
 
@@ -570,10 +570,10 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
       FROM ${schemaName}.candidates
       WHERE congressperson_type = 5 AND campus = ?;
     `;
-    const [congressPeople] = await db.execute(congressPeopleQuery, [campus]);
+    const [congressPeople] = await db.execute(congressPeopleQuery, [campusId]);
 
     if (congressPeople.length > 0) {
-      return res.json({ congressPeople, campusName }); // Send campus name and congresspeople
+      return res.json({ congressPeople, campusName, campusId }); // Include both campus name and ID
     } else {
       console.log('No candidates found for the specified campus and role');
       return res.status(404).send('No candidates found for the specified campus and role');
@@ -584,6 +584,7 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
     return res.status(500).send('Error fetching data');
   }
 });
+
 
 
 
@@ -2443,29 +2444,86 @@ app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => 
 });
 
 app.post('/api/campus-vote', async (req, res) => {
-  const { candidateId, campusName } = req.body;
-
+  const { userEmail, candidateId, campusName,campusId } = req.body;
   const year = new Date().getFullYear();
   const schemaName = `evoting_${year}`; // Dynamic schema name
 
-  if (!candidateId || !campusName) {
-    return res.status(400).send('Missing required fields');
+  // Validate request
+  if (!userEmail || !candidateId || !campusName) {
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
-    // Insert the vote into the votes table
-    const query = `
-      INSERT INTO ${schemaName}.campus_votes (candidate_id, campus_name)
-      VALUES (?, ?)
-    `;
-    await db.execute(query, [candidateId, campusName]);
+    // Insert or update the vote using ON DUPLICATE KEY UPDATE
+    const result = await db.query(
+      `INSERT INTO ${schemaName}.campuses_votes (user_email, candidate_id, campus_name,campus_id) 
+       VALUES (?, ?, ?,?)`, 
+      [userEmail, candidateId, campusName,campusId]
+    );
 
-    return res.status(200).send('Vote cast successfully!');
+    // Check affectedRows for confirmation
+    if (result.affectedRows === 1) {
+      // A new vote was inserted
+      return res.status(200).json({ message: 'Vote cast successfully!' });
+    } else if (result.affectedRows === 2) {
+      // An existing vote was updated (this means they changed their vote)
+      return res.status(200).json({ message: 'Your vote has been updated successfully!' });
+    }
+
   } catch (err) {
-    console.error('Error casting vote:', err);
-    return res.status(500).send('Failed to cast vote');
+    console.error('Error casting vote:', err.message || err);
+    return res.status(500).json({ error: 'Failed to cast vote' });
   }
 });
+
+app.get('/api/stats/campus-vote-stats/campus/:campusId', async (req, res) => {
+  const campusId = req.params.campusId;
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+  console.log('Received campus id:', campusId); // Debugging log
+
+  if (!campusId) {
+    return res.status(400).json({ message: 'Campus ID is required' });
+  }
+
+  // Query to get vote stats by campus ID and include candidate names
+  const query = `
+    SELECT 
+      cv.candidate_id,
+      c.name AS candidate_name,
+      COUNT(*) AS vote_count
+    FROM 
+      ${schemaName}.campuses_votes cv
+    JOIN 
+      ${schemaName}.candidates c ON cv.candidate_id = c.id
+    WHERE 
+      cv.campus_id = ?
+    GROUP BY 
+      cv.candidate_id, c.name
+    ORDER BY 
+      vote_count DESC
+  `;
+
+  try {
+    const [results] = await db.execute(query, [campusId]);
+
+    if (results.length === 0) {
+      return res.status(404).json({ message: `No vote stats found for campus: ${campusId}` });
+    }
+
+    console.log('Raw results:', results); // Debugging log
+
+    res.json(results); // Send the results including candidate names to the frontend
+  } catch (error) {
+    console.error('Error fetching campus vote stats:', error);
+    res.status(500).json({ message: 'An error occurred while fetching campus stats.' });
+  }
+});
+
+
+
+
 
 
 
