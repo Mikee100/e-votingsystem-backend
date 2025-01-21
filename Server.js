@@ -206,7 +206,7 @@ app.get('/departments/:schoolId', async (req, res) => {
   
     if (
       !name || !admissionno || !email || !password || !gender ||
-      !department_id || !school_id || !residency_status || !campus || !educationLevel || !studentType||
+      !department_id || !school_id || !residency_status || !campus || !educationLevel || !studentType ||
       !internationalStudent || !disabled ||
       (residency_status === 'Resident' && !house_id) ||
       (residency_status === 'Non-Resident' && !off_campus_address)
@@ -219,17 +219,16 @@ app.get('/departments/:schoolId', async (req, res) => {
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
   
-      const campusValue = campus === 'Yes' ? 1 : 0;
       const intlStudentValue = internationalStudent === 'Yes' ? 1 : 0;
       const disabledValue = disabled === 'Yes' ? 1 : 0;
       const verificationToken = crypto.randomBytes(32).toString('hex');
   
       const result = await db.query(
-        'INSERT INTO users (name, admissionno, email, password, gender, department, school, residency_status, hostel, off_campus_address, verificationToken, isVerified, campus, internationalstudent, disabled,student_type,education_level) VALUES (?, ?, ?, ?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (name, admissionno, email, password, gender, department, school, residency_status, hostel, off_campus_address, verificationToken, isVerified, campus, internationalstudent, disabled, student_type, education_level) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           name, admissionno, email, hashedPassword, gender, department_id,
           school_id, residency_status, house_id || null, off_campus_address || null,
-          verificationToken, false, campusValue, intlStudentValue, disabledValue, studentType, educationLevel
+          verificationToken, false, campus, intlStudentValue, disabledValue, studentType, educationLevel
         ]
       );
   
@@ -572,8 +571,18 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
     `;
     const [congressPeople] = await db.execute(congressPeopleQuery, [campusId]);
 
+    // Step 4: Fetch the user's vote
+    const voteQuery = `
+      SELECT candidate_id
+      FROM ${schemaName}.full_votes
+      WHERE user_email = ? AND candidate_type = 'Campus Congressperson';
+    `;
+    const [voteData] = await db.execute(voteQuery, [email]);
+
+    const votedCandidateId = voteData.length > 0 ? voteData[0].candidate_id : null;
+
     if (congressPeople.length > 0) {
-      return res.json({ congressPeople, campusName, campusId }); // Include both campus name and ID
+      return res.json({ congressPeople, campusName, campusId, votedCandidateId }); // Include both campus name and ID
     } else {
       console.log('No candidates found for the specified campus and role');
       return res.status(404).send('No candidates found for the specified campus and role');
@@ -584,7 +593,6 @@ app.get('/api/getCongressPeopleByCampus', async (req, res) => {
     return res.status(500).send('Error fetching data');
   }
 });
-
 
 
 
@@ -619,12 +627,10 @@ app.get('/api/getCongressPeopleByStudentType', async (req, res) => {
     // Transform student_type if it's 'CEP'
     if (student_type === 'CEP') {
       student_type = 'CEP Congressperson';
-    }else if(student_type === 'DSVOL'){
+    } else if (student_type === 'DSVOL') {
       student_type = 'DSVOL Congressperson';
-
-    }else{
+    } else {
       student_type = 'Regular Congressperson';
-
     }
 
     // Step 2: Fetch congressperson_type ID from congresspersonrole table
@@ -652,10 +658,21 @@ app.get('/api/getCongressPeopleByStudentType', async (req, res) => {
     `;
     const [congressPeople] = await db.execute(congressPeopleQuery, [congresspersonTypeId]);
 
+    // Step 4: Fetch the user's vote
+    const voteQuery = `
+      SELECT candidate_id
+      FROM ${schemaName}.full_votes
+      WHERE user_email = ? AND candidate_type = ?;
+    `;
+    const [voteData] = await db.execute(voteQuery, [email, student_type]);
+
+    const votedCandidateId = voteData.length > 0 ? voteData[0].candidate_id : null;
+
     if (congressPeople.length > 0) {
       return res.json({
         congressPeople,
-        studentType: student_type // Include transformed student_type in the response
+        studentType: student_type, // Include transformed student_type in the response
+        votedCandidateId
       });
     } else {
       console.log('No congresspeople found for congressperson_type ID:', congresspersonTypeId);
@@ -667,7 +684,6 @@ app.get('/api/getCongressPeopleByStudentType', async (req, res) => {
     return res.status(500).send('Error fetching data');
   }
 });
-
 
 
 app.get('/api/fetchCandidatesByResidency', async (req, res) => {
@@ -694,10 +710,12 @@ app.get('/api/fetchCandidatesByResidency', async (req, res) => {
       return res.status(404).send('User not found');
     }
 
-    const { residency_status, campus_id } = userData[0];
+    const { residency_status, campus } = userData[0];
+    console.log('User residency status:', residency_status);
+    console.log('User campus ID:', campus);
 
     // Check if the user is from the main campus
-    if (campus_id !== 1) {
+    if (campus !== 1) {
       console.log('User is not from the main campus');
       return res.status(403).send('Access denied. Only main campus users can view these candidates.');
     }
@@ -706,14 +724,24 @@ app.get('/api/fetchCandidatesByResidency', async (req, res) => {
     const candidatesQuery = `
       SELECT *
       FROM ${schemaName}.candidates
-      WHERE resident_status = ?;
+      WHERE congressperson_type = 9;
     `;
+    const [Residentcandidates] = await db.execute(candidatesQuery);
 
-    const [Residentcandidates] = await db.execute(candidatesQuery, [residency_status]);
+    // Step 3: Fetch the user's vote
+    const voteQuery = `
+      SELECT candidate_id
+      FROM ${schemaName}.full_votes
+      WHERE user_email = ? AND candidate_type = 'Non-Resident Congressperson';
+    `;
+    const [voteData] = await db.execute(voteQuery, [email]);
+
+    const votedCandidateId = voteData.length > 0 ? voteData[0].candidate_id : null;
 
     if (Residentcandidates.length > 0) {
       const response = {
-        Residentcandidates
+        Residentcandidates,
+        votedCandidateId
       };
       return res.json(response);
     } else {
@@ -759,21 +787,31 @@ app.get('/api/getCongressPeopleByDisability', async (req, res) => {
       return res.status(403).send('User is not eligible to see Disabled candidates');
     }
 
-    console.log('Fetching international candidates for user:', email);
+    console.log('Fetching disabled candidates for user:', email);
 
-    // Step 2: Fetch congresspeople with ID 4 for international candidates
+    // Step 2: Fetch congresspeople with ID 4 for disabled candidates
     const congressPeopleQuery = `
       SELECT *
       FROM ${schemaName}.candidates
-      WHERE congressperson_type = 4;
+      WHERE congressperson_type = 6;
     `;
     const [congressPeople] = await db.execute(congressPeopleQuery);
 
+    // Step 3: Fetch the user's vote
+    const voteQuery = `
+      SELECT candidate_id
+      FROM ${schemaName}.full_votes
+      WHERE user_email = ? AND candidate_type = 'Disabled Congressperson';
+    `;
+    const [voteData] = await db.execute(voteQuery, [email]);
+
+    const votedCandidateId = voteData.length > 0 ? voteData[0].candidate_id : null;
+
     if (congressPeople.length > 0) {
-      return res.json({ congressPeople });
+      return res.json({ congressPeople, votedCandidateId });
     } else {
-      console.log('No international candidates found');
-      return res.status(404).send('No international candidates found');
+      console.log('No disabled candidates found');
+      return res.status(404).send('No disabled candidates found');
     }
 
   } catch (err) {
@@ -823,8 +861,18 @@ app.get('/api/getCongressPeopleByInternational', async (req, res) => {
     `;
     const [congressPeople] = await db.execute(congressPeopleQuery);
 
+    // Step 3: Fetch the user's vote
+    const voteQuery = `
+      SELECT candidate_id
+      FROM ${schemaName}.full_votes
+      WHERE user_email = ? AND candidate_type = 'International Congressperson';
+    `;
+    const [voteData] = await db.execute(voteQuery, [email]);
+
+    const votedCandidateId = voteData.length > 0 ? voteData[0].candidate_id : null;
+
     if (congressPeople.length > 0) {
-      return res.json({ congressPeople });
+      return res.json({ congressPeople, votedCandidateId });
     } else {
       console.log('No international candidates found');
       return res.status(404).send('No international candidates found');
@@ -835,6 +883,8 @@ app.get('/api/getCongressPeopleByInternational', async (req, res) => {
     return res.status(500).send('Error fetching data');
   }
 });
+
+
 
 
 
@@ -2346,31 +2396,29 @@ app.post('/api/vote', async (req, res) => {
   const schemaName = `evoting_${year}`; // Dynamic schema name
 
   if (!email || !candidateId || !candidateType) {
-      return res.status(400).json({ error: 'All fields are required' });
+    return res.status(400).json({ error: 'All fields are required' });
   }
 
   try {
-      // Check if the user has already voted for this candidate
-      const [existingVote] = await db.execute(
-          `SELECT * FROM ${schemaName}.full_votes WHERE user_email = ? AND candidate_id = ?`,
-          [email, candidateId]
-      );
+    // Check if the user has already voted for any candidate of the specified type
+    const [existingVote] = await db.execute(
+      `SELECT * FROM ${schemaName}.full_votes WHERE user_email = ? AND candidate_type = ?`,
+      [email, candidateType]
+    );
 
-      if (existingVote.length > 0) {
-          return res.status(400).json({ error: 'You have already voted for this candidate' });
-      }
+    if (existingVote.length > 0) {
+      return res.status(400).json({ error: 'You have already voted for this type of candidate' });
+    }
 
-      
-      const query = `INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) VALUES (?, ?, ?)`;
-      await db.execute(query, [email, candidateId, candidateType]);
+    const query = `INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) VALUES (?, ?, ?)`;
+    await db.execute(query, [email, candidateId, candidateType]);
 
-      res.status(200).json({ message: 'Vote cast successfully' });
+    res.status(200).json({ message: 'Vote cast successfully' });
   } catch (error) {
-      console.error('Error casting vote:', error);
-      res.status(500).json({ error: 'Failed to cast vote' });
+    console.error('Error casting vote:', error);
+    res.status(500).json({ error: 'Failed to cast vote' });
   }
 });
-
 
 app.get('/api/congressperson', async(req,res) => {
   try{
