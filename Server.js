@@ -2022,49 +2022,128 @@ app.get('/api/all/presidential-candidates', async (req, res) => {
 });
 
 app.post('/api/vote-president', async (req, res) => {
-  const { email, partyId, userId } = req.body;
+  const { email, partyId } = req.body;
+  const year = req.query.year || new Date().getFullYear(); // Extract year or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+  const secretKey = process.env.SECRET_KEY || 'your-secret-key'; // Replace with a secure key from your environment
 
   if (!email || !partyId) {
-    console.error('Error: Missing email or partyId in request body.');
     return res.status(400).json({ message: 'Email and partyId are required.' });
   }
 
   try {
-    console.log(`User attempting to vote: { email: ${email}, partyId: ${partyId} }`);
+    // Generate anonymous ID
+    const anonymousId = crypto.createHmac('sha256', secretKey)
+                              .update(email)
+                              .digest('hex');
 
-    // Generate an anonymous ID by hashing the email and partyId with a secret key
-    const secretKey = process.env.SECRET_KEY || 'your-secret-key'; // Use an environment variable for the secret key
-    const hash = crypto.createHmac('sha256', secretKey)
-                       .update(`${email}:${partyId}`)
-                       .digest('hex');
-    const anonymousId = hash;
-
-    // Check if an anonymous ID already exists in the database
+    // Check if this anonymous ID has already voted
     const [existingVote] = await db.query(
-      'SELECT * FROM presidential_votes WHERE anonymous_id = ?',
+      `SELECT * FROM ${schemaName}.presidential_votes WHERE anonymous_id = ?`,
       [anonymousId]
     );
 
-    console.log('Existing vote:', existingVote);
-
     if (existingVote.length > 0) {
-      console.warn('User has already voted for a president. Rejecting request.');
-      return res.status(400).json({ message: 'You have already voted for a president.' });
+      return res.status(400).json({ message: 'You have already voted.' });
     }
 
-    // Record the vote with the anonymous ID
+    // Record the vote
     await db.query(
-      'INSERT INTO presidential_votes (party_id, anonymous_id, user_id) VALUES (?, ?, ?)', 
-      [partyId, anonymousId, userId]
+      `INSERT INTO ${schemaName}.presidential_votes (party_id, anonymous_id) VALUES (?, ?)`,
+      [partyId, anonymousId]
     );
-  
 
-    return res.status(200).json({ message: 'Your vote has been recorded successfully.' });
+    res.status(200).json({ message: 'Your vote has been recorded successfully.' });
   } catch (error) {
-    console.error('Error occurred while processing vote:', error);
-    return res.status(500).json({ message: 'An error occurred while processing your vote.' });
+    console.error('Error processing vote:', error);
+    res.status(500).json({ message: 'An error occurred while processing your vote.' });
   }
 });
+
+
+app.post('/api/verify-vote', async (req, res) => {
+  const { email } = req.body;
+  const year = new Date().getFullYear(); // Default to current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+  const secretKey = process.env.SECRET_KEY || 'your-secret-key'; // Replace with a secure key from your environment
+
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required.' });
+  }
+
+  try {
+    // Generate anonymous ID from email
+    const anonymousId = crypto.createHmac('sha256', secretKey)
+                              .update(email)
+                              .digest('hex');
+
+    // Check if the user has voted
+    const [voteDetails] = await db.query(
+      `SELECT * FROM ${schemaName}.presidential_votes WHERE anonymous_id = ?`,
+      [anonymousId]
+    );
+
+    if (!voteDetails.length) {
+      return res.status(404).json({ message: 'Vote not found.' });
+    }
+
+    res.status(200).json({ voteDetails: voteDetails[0] });
+  } catch (error) {
+    console.error('Error verifying vote:', error);
+    res.status(500).json({ message: 'An error occurred while verifying your vote.' });
+  }
+});
+
+
+// Route to look up a voter by anonymous number (token or identifier)
+app.get('/api/admin/voter-lookup', async (req, res) => {
+  const { anonymousNumber } = req.query; // Get the anonymous number from query
+  const year = req.query.year || new Date().getFullYear(); // Extract year or use current year
+  const schemaName = `evoting_${year}`;
+  if (!anonymousNumber) {
+    return res.status(400).json({ message: 'Anonymous number is required.' });
+  }
+
+  try {
+    // Query to get the user's email and the candidate they voted for
+    const [voterDetails] = await db.query(
+      `SELECT u.email, p.party_name, l.name AS president_name
+       FROM ${schemaName}.presidential_votes v
+       JOIN users u ON v.id = u.id
+       JOIN parties p ON v.party_id = p.id
+       JOIN leaders l ON p.id = l.party_id AND l.position = 'President'
+       WHERE v.anonymous_id = ?`,  // Changed to 'anonymous_id'
+      [anonymousNumber]
+    );
+
+    if (voterDetails.length === 0) {
+      return res.status(404).json({ message: 'No matching voter found for the given anonymous number.' });
+    }
+
+    res.status(200).json(voterDetails[0]); // Returning the first matched result
+  } catch (error) {
+    console.error('Error looking up voter:', error);
+    res.status(500).json({ message: 'An error occurred while looking up the voter.' });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 app.post('/api/admin/lookup-voter', async (req, res) => {
   const { anonymousId } = req.body;
 
