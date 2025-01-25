@@ -432,7 +432,6 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
     gender,
     motto,
     hostel,
-
     year,
     residentStatus,
     disabilityStatus,
@@ -441,15 +440,14 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
 
   const photoPath = req.file ? req.file.path : null;
 
-
   try {
     const sql = `
       INSERT INTO evoting_${year}.candidates (
-        name, admission_no, school_id, department_id, role, congressperson_type, gender, motto, hostel,  photo_path, is_approved, resident_status, disability_status, campus
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+        name, admission_no, school_id, department_id, role, congressperson_type, gender, motto, hostel, photo_path, is_approved, resident_status, disability_status, campus, approval_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    await db.query(sql, [name, admissionNo, school, department, role, congresspersonType, gender, motto, hostel,  photoPath, false, residentStatus, disabilityStatus, campus]);
+    await db.query(sql, [name, admissionNo, school, department, role, congresspersonType, gender, motto, hostel, photoPath, false, residentStatus, disabilityStatus, campus, null]);
 
     res.status(201).send('Candidate registered successfully');
   } catch (error) {
@@ -457,6 +455,7 @@ app.post('/candidate-register', upload.single('photo'), async (req, res) => {
     res.status(500).send('Error inserting candidate');
   }
 });
+
 
 
 app.post('/api/approve-candidate/:id', async (req, res) => {
@@ -2469,35 +2468,80 @@ app.put("/campuses/:id", async (req, res) => {
 });
 
 
-app.post('/api/vote', async (req, res) => {
-  const { email, candidateId, candidateType } = req.body;
+app.post('/api/generate-token', async (req, res) => {
+  const { voterId, candidateType } = req.body;
   const year = new Date().getFullYear();
-  const schemaName = `evoting_${year}`; // Dynamic schema name
+  const schemaName = `evoting_${year}`; // Dynamic schema name for the current year
 
-  if (!email || !candidateId || !candidateType) {
-    return res.status(400).json({ error: 'All fields are required' });
+  // Log the received request data to check if the body is correct
+  console.log('Received voterId:', voterId, 'candidateType:', candidateType);
+
+  if (!voterId || !candidateType) {
+    return res.status(400).json({ error: 'Voter ID and Candidate Type are required' });
   }
 
   try {
-    // Check if the user has already voted for any candidate of the specified type
+    // Hash the voter ID using SHA-256 for security
+    const hashedVoterId = crypto.createHash('sha256').update(voterId).digest('hex');
+    console.log('Hashed Voter ID:', hashedVoterId); // Log the hashed voter ID to verify
+
+    // Generate a unique voting token
+    const token = crypto.randomBytes(16).toString('hex');
+    console.log('Generated Token:', token); // Log the generated token for debugging
+
+    // Insert hashed voter ID, token, and candidate type into the database
+    const result = await db.execute(
+      `INSERT INTO ${schemaName}.voting_tokens (token, candidate_type, hashed_voter_id) VALUES (?, ?, ?)`,
+      [token, candidateType, hashedVoterId]
+    );
+    
+    // Log the result of the database insertion
+    console.log('Database insert result:', result);
+
+    // Return the token to the client
+    res.status(200).json({ token });
+  } catch (error) {
+    console.error('Error generating token:', error.message);
+    res.status(500).json({ error: 'Failed to generate token. Please try again later.' });
+  }
+});
+
+// Cast Vote Endpoint
+app.post('/api/vote', async (req, res) => {
+  const { email, candidateId, candidateType } = req.body;
+
+  if (!email || !candidateId || !candidateType) {
+    return res.status(400).json({ error: 'Email, Candidate ID, and Candidate Type are required' });
+  }
+
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name for the current year
+
+  try {
+    // Check if the user has already voted for this candidate type
     const [existingVote] = await db.execute(
       `SELECT * FROM ${schemaName}.full_votes WHERE user_email = ? AND candidate_type = ?`,
       [email, candidateType]
     );
 
     if (existingVote.length > 0) {
-      return res.status(400).json({ error: 'You have already voted for this type of candidate' });
+      return res.status(400).json({ error: 'You have already voted for this type of candidate.' });
     }
 
-    const query = `INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) VALUES (?, ?, ?)`;
+    // Insert the vote into the database
+    const query = `
+      INSERT INTO ${schemaName}.full_votes (user_email, candidate_id, candidate_type) 
+      VALUES (?, ?, ?)
+    `;
     await db.execute(query, [email, candidateId, candidateType]);
 
-    res.status(200).json({ message: 'Vote cast successfully' });
+    res.status(200).json({ message: 'Vote cast successfully!' });
   } catch (error) {
-    console.error('Error casting vote:', error);
-    res.status(500).json({ error: 'Failed to cast vote' });
+    console.error('Error casting vote:', error.message);
+    res.status(500).json({ error: 'Failed to cast vote. Please try again later.' });
   }
 });
+
 
 app.get('/api/congressperson', async(req,res) => {
   try{
