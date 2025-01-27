@@ -59,6 +59,29 @@ let db;
   }
 })();
 
+app.get('/api/dashboard-stats', async (req, res) => {
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`;
+
+  try {
+    const [usersCount] = await db.query('SELECT COUNT(*) AS count FROM users');
+    const [candidatesCount] = await db.query(`SELECT COUNT(*) AS count FROM ${schemaName}.candidates`);
+
+    console.log('Users Count:', usersCount); // Log query results
+    console.log('Candidates Count:', candidatesCount);
+
+    res.json({
+      totalUsers: usersCount.count,
+      totalCandidates: candidatesCount.count,
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+  }
+});
+
+
+
 // Fetch schools from the database
 app.get('/schools', async (req, res) => {
   try {
