@@ -1309,7 +1309,8 @@ app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
         SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
         FROM ${schemaName}.congressperson_votes AS cv
         JOIN ${schemaName}.candidates AS c ON cv.leader_id = c.id
-        WHERE c.school_id = ?
+        JOIN  congresspersonroles AS cr ON c.congressperson_type = cr.id
+        WHERE c.school_id = ? AND cr.id = 1
         GROUP BY cv.leader_id, c.name, c.photo_path
       `,
       delegate: `
@@ -1358,6 +1359,7 @@ app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch vote stats' });
   }
 });
+
 
 
 
@@ -1976,43 +1978,47 @@ app.get('/api/candidate/:id', async (req, res) => {
 
 
 app.get('/api/winners', async (req, res) => {
+
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
   try {
     // Fetch the winners for each category grouped by school
     const [houseRepWinners] = await db.query(
       `SELECT c.name, s.schoolname AS school_name, c.hostel, hr.vote_count, c.photo_path
-       FROM candidates c
-       JOIN hostelrep_votes hr ON c.id = hr.leader_id
+       FROM ${schemaName}.candidates c
+       JOIN ${schemaName}.hostelrep_votes hr ON c.id = hr.leader_id
        JOIN schools s ON c.school_id = s.idschools
        WHERE hr.vote_count = (
          SELECT MAX(hr2.vote_count)
-         FROM hostelrep_votes hr2
-         JOIN candidates c2 ON hr2.leader_id = c2.id
+         FROM ${schemaName}.hostelrep_votes hr2
+         JOIN ${schemaName}.candidates c2 ON hr2.leader_id = c2.id
          WHERE c2.school_id = c.school_id
        )`
     );
 
     const [delegateWinners] = await db.query(
       `SELECT c.name, s.schoolname AS school_name, d.vote_count, c.photo_path
-       FROM candidates c
-       JOIN delegates_votes d ON c.id = d.leader_id
+       FROM ${schemaName}.candidates c
+       JOIN ${schemaName}.delegates_votes d ON c.id = d.leader_id
        JOIN schools s ON c.school_id = s.idschools
        WHERE d.vote_count = (
          SELECT MAX(d2.vote_count)
-         FROM delegates_votes d2
-         JOIN candidates c2 ON d2.leader_id = c2.id
+         FROM ${schemaName}.delegates_votes d2
+         JOIN ${schemaName}.candidates c2 ON d2.leader_id = c2.id
          WHERE c2.school_id = c.school_id
        )`
     );
 
     const [congresspersonWinners] = await db.query(
       `SELECT c.name, s.schoolname AS school_name, cp.vote_count, c.photo_path
-       FROM candidates c
-       JOIN congressperson_votes cp ON c.id = cp.leader_id
+       FROM ${schemaName}.candidates c
+       JOIN ${schemaName}.congressperson_votes cp ON c.id = cp.leader_id
        JOIN schools s ON c.school_id = s.idschools
        WHERE cp.vote_count = (
          SELECT MAX(cp2.vote_count)
-         FROM congressperson_votes cp2
-         JOIN candidates c2 ON cp2.leader_id = c2.id
+         FROM ${schemaName}.congressperson_votes cp2
+         JOIN ${schemaName}.candidates c2 ON cp2.leader_id = c2.id
          WHERE c2.school_id = c.school_id
        )`
     );
