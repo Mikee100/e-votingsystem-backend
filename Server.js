@@ -15,11 +15,23 @@ import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 dotenv.config();
+import session from  'express-session';
+import cookieParser from 'cookie-parser';
+
 
 const JWT_SECRET='waweru';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+
+app.use(cookieParser());
+app.use(session({
+  secret: 'waweru', // use a secure key
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: false } // For development, you can keep it as false. Set to true when using HTTPS
+}));
 
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
@@ -31,6 +43,8 @@ app.use(cors({
   
     credentials: true, // Allow credentials if needed
 }));
+
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -64,21 +78,26 @@ app.get('/api/dashboard-stats', async (req, res) => {
   const schemaName = `evoting_${year}`;
 
   try {
-    const [usersCount] = await db.query('SELECT COUNT(*) AS count FROM users');
-    const [candidatesCount] = await db.query(`SELECT COUNT(*) AS count FROM ${schemaName}.candidates`);
+    const [usersResult] = await db.query('SELECT COUNT(*) AS count FROM users');
+    const [candidatesResult] = await db.query(`SELECT COUNT(*) AS count FROM ${schemaName}.candidates`);
 
-    console.log('Users Count:', usersCount); // Log query results
-    console.log('Candidates Count:', candidatesCount);
+    // Extract counts correctly
+    const totalUsers = usersResult[0]?.count || 0;
+    const totalCandidates = candidatesResult[0]?.count || 0;
+
+    console.log('Total Users:', totalUsers);
+    console.log('Total Candidates:', totalCandidates);
 
     res.json({
-      totalUsers: usersCount.count,
-      totalCandidates: candidatesCount.count,
+      totalUsers,
+      totalCandidates,
     });
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ error: 'Failed to fetch dashboard stats' });
   }
 });
+
 
 
 
@@ -310,13 +329,20 @@ app.get('/departments/:schoolId', async (req, res) => {
     }
   });
 });
+app.get('/protected-route', (req, res) => {
+  if (!req.session.token) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  // Process the protected route
+  res.status(200).json({ message: 'Welcome to the protected route' });
+});
 
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Fetch user from the database
     const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
 
     if (user.length === 0) {
@@ -337,15 +363,30 @@ app.post('/login', async (req, res) => {
     }
 
     // Create JWT token
-    const token = jwt.sign({ userId: existingUser.id, email: existingUser.email, role: existingUser.role }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign(
+      { userId: existingUser.id, email: existingUser.email, role: existingUser.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
-    // Send token and role back to the client
-    return res.status(200).json({ message: 'Login successful', token, role: existingUser.role, userId: existingUser.id });
+    // Store the token and user data in the session
+    req.session.token = token;
+    req.session.userId = existingUser.id;
+    req.session.role = existingUser.role;
+
+    // Send the token and role in the response
+    return res.status(200).json({
+      message: 'Login successful',
+      token: token,       // Send the token in the response
+      role: existingUser.role, // Send the role in the response
+    });
   } catch (error) {
     console.error('Error during login:', error.message);
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
+
 
 app.post('/logout', (req, res) => {
 
@@ -522,7 +563,13 @@ app.get('/api/unapproved-candidates', async (req, res) => {
 app.get('/userprofile', async (req, res) => {
   const email = req.query.email; // Get email from query parameter
 
+  // Check if the email is provided
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' });
+  }
+
   try {
+    // Use the email in the query, making sure it's a valid string
     const [user] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
 
     // Check if user exists
@@ -531,7 +578,7 @@ app.get('/userprofile', async (req, res) => {
     }
 
     const existingUser = user[0];
-    
+
     // Exclude password or any sensitive data from response
     delete existingUser.password; // Optional: do not send the password
 
@@ -542,6 +589,7 @@ app.get('/userprofile', async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 
 app.get('/api/getCongressPeopleByCampus', async (req, res) => {
@@ -1188,6 +1236,9 @@ app.get('/votes/tally', async (req, res) => {
 
 
 
+
+
+
 app.post('/vote/delegate', async (req, res) => {
   const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
@@ -1253,6 +1304,7 @@ app.post('/vote/hostelrep', async (req, res) => {
     res.status(500).json({ message: 'Failed to cast vote for hostel representative.' });
   }
 });
+
 
 
 
@@ -1582,11 +1634,10 @@ app.get('/api/elections/:id/status', async (req, res) => {
     const endDate = new Date(rows[0].end_date);
     const currentDate = new Date();
 
-    console.log(`End date: ${endDate}`);
-    console.log(`Current date: ${currentDate}`);
+   
 
     if (currentDate > endDate) {
-      console.log(`Election ID: ${id} is closed`);
+      
       return res.status(200).json({ status: 'closed' });
     } else {
       console.log(`Election ID: ${id} is open`);
