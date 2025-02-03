@@ -1240,68 +1240,108 @@ app.get('/votes/tally', async (req, res) => {
 
 
 app.post('/vote/delegate', async (req, res) => {
-  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
+  const { email, leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
-    // Dynamically set the schema name
-    const schemaName = `evoting_${year}`;
-    
-    // Insert vote into the delegates_votes table in the specified schema
-    await db.query(
-      `INSERT INTO ${schemaName}.delegates_votes (leader_id, school_id, vote_count) 
-       VALUES (?, ?, 1) 
-       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
-      [leaderId, schoolId]
+    if (!email || !leaderId || !schoolId) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    const schemaName = `evoting_${String(year).replace(/[^0-9]/g, "")}`;
+
+    // Check if the user has already voted
+    const [existingVote] = await db.query(
+      `SELECT email FROM ??.delegates_votes WHERE email = ? LIMIT 1`,
+      [schemaName, email]
     );
 
-    res.json({ success: true });
+    if (existingVote.length > 0) {
+      return res.status(400).json({ message: "You have already voted." });
+    }
+
+    // Insert vote with email
+    await db.query(
+      `INSERT INTO ??.delegates_votes (leader_id, school_id, email, vote_count) 
+       VALUES (?, ?, ?, 1)`,
+      [schemaName, leaderId, schoolId, email]
+    );
+
+    res.json({ success: true, message: "Vote cast successfully!" });
   } catch (err) {
-    console.error('Failed to cast vote for delegate:', err);
-    res.status(500).json({ message: 'Failed to cast vote for delegate.' });
+    console.error("Error casting vote:", err); // Log error
+    res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 });
 
 app.post('/vote/congressperson', async (req, res) => {
-  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
+  const { email, leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
-    // Dynamically set the schema name
-    const schemaName = `evoting_${year}`;
-    
-    // Insert vote into the congressperson_votes table in the specified schema
-    await db.query(
-      `INSERT INTO ${schemaName}.congressperson_votes (leader_id, school_id, vote_count) 
-       VALUES (?, ?, 1) 
-       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
-      [leaderId, schoolId]
+    if (!email || !leaderId || !schoolId) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    const schemaName = `evoting_${String(year).replace(/[^0-9]/g, "")}`;
+
+    // Check if the user has already voted
+    const [existingVote] = await db.query(
+      `SELECT email FROM ??.congressperson_votes WHERE email = ? LIMIT 1`,
+      [schemaName, email]
     );
 
-    res.json({ success: true });
+    if (existingVote.length > 0) {
+      return res.status(400).json({ message: "You have already voted." });
+    }
+
+    // Insert vote with email
+    await db.query(
+      `INSERT INTO ??.congressperson_votes (leader_id, school_id, email, vote_count) 
+       VALUES (?, ?, ?, 1)`,
+      [schemaName, leaderId, schoolId, email]
+    );
+
+    res.json({ success: true, message: "Vote cast successfully!" });
   } catch (err) {
-    console.error('Failed to cast vote for congressperson:', err);
-    res.status(500).json({ message: 'Failed to cast vote for congressperson.' });
+    console.error("Error casting vote:", err); // Log error
+    res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 });
 
+
+
+
+
 app.post('/vote/hostelrep', async (req, res) => {
-  const { leaderId, schoolId, year = new Date().getFullYear() } = req.body;
+  const { email, leaderId, schoolId, year = new Date().getFullYear() } = req.body;
 
   try {
-    // Dynamically set the schema name
-    const schemaName = `evoting_${year}`;
-    
-    // Insert vote into the hostelrep_votes table in the specified schema
-    await db.query(
-      `INSERT INTO ${schemaName}.hostelrep_votes (leader_id, school_id, vote_count) 
-       VALUES (?, ?, 1) 
-       ON DUPLICATE KEY UPDATE vote_count = vote_count + 1`,
-      [leaderId, schoolId]
+    if (!email || !leaderId || !schoolId) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    const schemaName = `evoting_${String(year).replace(/[^0-9]/g, "")}`;
+
+    // Check if the user has already voted
+    const [existingVote] = await db.query(
+      `SELECT email FROM ??.hostelrep_votes WHERE email = ? LIMIT 1`,
+      [schemaName, email]
     );
 
-    res.json({ success: true });
+    if (existingVote.length > 0) {
+      return res.status(400).json({ message: "You have already voted." });
+    }
+
+    // Insert vote with email
+    await db.query(
+      `INSERT INTO ??.hostelrep_votes (leader_id, school_id, email, vote_count) 
+       VALUES (?, ?, ?, 1)`,
+      [schemaName, leaderId, schoolId, email]
+    );
+
+    res.json({ success: true, message: "Vote cast successfully!" });
   } catch (err) {
-    console.error('Failed to cast vote for hostel representative:', err);
-    res.status(500).json({ message: 'Failed to cast vote for hostel representative.' });
+    console.error("Error casting vote:", err); // Log error
+    res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 });
 
