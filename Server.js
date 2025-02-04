@@ -17,7 +17,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import session from  'express-session';
 import cookieParser from 'cookie-parser';
-
+import rateLimit from 'express-rate-limit';
 
 const JWT_SECRET='waweru';
 
@@ -27,10 +27,14 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cookieParser());
 app.use(session({
-  secret: 'waweru', // use a secure key
+  secret: 'waweru',
   resave: false,
   saveUninitialized: true,
-  cookie: { secure: false } // For development, you can keep it as false. Set to true when using HTTPS
+  cookie: {
+    secure: true, // Ensure cookies are only sent over HTTPS
+    httpOnly: true, // Prevent client-side script access to the cookie
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
 }));
 
 app.use(bodyParser.json({ limit: '50mb' }));
@@ -339,7 +343,13 @@ app.get('/protected-route', (req, res) => {
 });
 
 
-app.post('/login', async (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 login requests per windowMs
+  message: 'Too many login attempts. Please try again later.',
+});
+
+app.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -351,41 +361,35 @@ app.post('/login', async (req, res) => {
 
     const existingUser = user[0];
 
-    // Check if user is verified
     if (!existingUser.isVerified) {
       return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
     }
 
-    // Compare password
     const passwordMatch = await bcrypt.compare(password, existingUser.password);
     if (!passwordMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    // Create JWT token
     const token = jwt.sign(
       { userId: existingUser.id, email: existingUser.email, role: existingUser.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    // Store the token and user data in the session
     req.session.token = token;
     req.session.userId = existingUser.id;
     req.session.role = existingUser.role;
 
-    // Send the token and role in the response
     return res.status(200).json({
       message: 'Login successful',
-      token: token,       // Send the token in the response
-      role: existingUser.role, // Send the role in the response
+      token: token,
+      role: existingUser.role,
     });
   } catch (error) {
     console.error('Error during login:', error.message);
     return res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 
 app.post('/logout', (req, res) => {
@@ -852,12 +856,11 @@ app.get('/api/getCongressPeopleByDisability', async (req, res) => {
 
     const { disabled } = userData[0];
 
+ console.log('User disabled status:', disabled);
     if (disabled !== 1) {
       console.log('User is not eligible to see Disabled candidates');
-      return res.status(403).send('User is not eligible to see Disabled candidates');
+      return res.status(403).send('Access denied. Only Disabled users can view these candidates.');
     }
-
-    console.log('Fetching disabled candidates for user:', email);
 
     // Step 2: Fetch congresspeople with ID 4 for disabled candidates
     const congressPeopleQuery = `
@@ -977,6 +980,7 @@ const getCandidatesBySchool = async (schoolId, userEmail, year = new Date().getF
 
     const userHostel = user[0]?.hostel || null;
 
+  console.log('User hostel:', userHostel);
     let candidatesByHostel = [];
 
     // Only fetch candidates by hostel if the user has a hostel associated
