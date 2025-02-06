@@ -1135,6 +1135,32 @@ app.get('/api/candidates/school/:schoolId', async (req, res) => {
   }
 });
 
+app.get('/api/candidates/congress/:congressId', async (req, res) => {
+  const { congressId } = req.params;
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+  try {
+    // Query to fetch candidates by school from the dynamic schema
+    const [candidates] = await db.query(
+      `
+      SELECT id, name,admission_no,role,gender,motto, photo_path AS photo
+      FROM ${schemaName}.candidates
+      WHERE congressperson_type = ?
+      `,
+      [congressId]
+    );
+
+    if (candidates.length === 0) {
+      return res.status(404).json({ message: "No candidates available for this school." });
+    }
+
+    res.json({ candidates });
+  } catch (error) {
+    console.error('Error fetching candidates by school:', error);
+    res.status(500).json({ error: 'Failed to fetch candidates' });
+  }
+});
 
 
 
