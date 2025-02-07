@@ -344,8 +344,8 @@ app.get('/protected-route', (req, res) => {
 
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 login requests per windowMs
+  windowMs: 3 * 60 * 1000, 
+  max: 5, 
   message: 'Too many login attempts. Please try again later.',
 });
 
@@ -360,6 +360,11 @@ app.post('/login', loginLimiter, async (req, res) => {
     }
 
     const existingUser = user[0];
+
+    // Check if the user is disabled
+    if (existingUser.status_disabled) {
+      return res.status(403).json({ message: 'Your account has been disabled. Please contact support.' });
+    }
 
     if (!existingUser.isVerified) {
       return res.status(403).json({ message: 'Your account is not verified. Please verify your email to log in.' });
@@ -390,6 +395,7 @@ app.post('/login', loginLimiter, async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 
 app.post('/logout', (req, res) => {
@@ -1428,12 +1434,16 @@ app.get('/api/admin/vote-stats/:type/:id', async (req, res) => {
   const voteQueries = {
     school: {
       congressperson: `
-        SELECT c.name AS candidateName, c.photo_path AS photo, cv.leader_id, SUM(cv.vote_count) AS voteCount
-        FROM ${schemaName}.congressperson_votes AS cv
-        JOIN ${schemaName}.candidates AS c ON cv.leader_id = c.id
-        JOIN  congresspersonroles AS cr ON c.congressperson_type = cr.id
-        WHERE c.school_id = ? AND cr.id = 1
-        GROUP BY cv.leader_id, c.name, c.photo_path
+       SELECT c.name AS candidateName, 
+       c.photo_path AS photo, 
+       vs.leader_id, 
+       SUM(vs.total_votes) AS voteCount
+FROM ${schemaName}.congressperson_results AS vs
+JOIN ${schemaName}.candidates AS c ON vs.leader_id = c.id
+JOIN congresspersonroles AS cr ON c.congressperson_type = cr.id
+WHERE c.school_id = ? AND cr.id = 1
+GROUP BY vs.leader_id, c.name, c.photo_path;
+
       `,
       delegate: `
         SELECT c.name AS candidateName, c.photo_path AS photo, dv.leader_id, SUM(dv.vote_count) AS voteCount
@@ -1907,6 +1917,13 @@ app.delete('/leaders/:id', async (req, res) => {
 app.post('/api/register-president', upload.array('images'), async (req, res) => {
   const { partyName, motto, campaignObjectives, leaders, email, password } = req.body;
   const files = req.files;
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+
+  // Assuming the first file is the party banner image and the rest are leaders' images
+  const partyBannerFile = files[0];  // First file is the party banner
+  const leaderFiles = files.slice(1); // The remaining files are the leaders' images
 
   try {
     // Hash the password
@@ -1921,9 +1938,10 @@ app.post('/api/register-president', upload.array('images'), async (req, res) => 
     const presidentId = userResult.insertId;
 
     // Insert party details into the database
+    const bannerImagePath = partyBannerFile ? partyBannerFile.path : null;  // Get the banner image path
     const [partyResult] = await db.query(
-      'INSERT INTO parties (party_name, motto, campaign_objectives, president_id) VALUES (?, ?, ?, ?)',
-      [partyName, motto, campaignObjectives, presidentId]
+      `INSERT INTO ${schemaName}.parties (party_name, motto, campaign_objectives, president_id, banner_image) VALUES (?, ?, ?, ?, ?)`,
+      [partyName, motto, campaignObjectives, presidentId, bannerImagePath]
     );
 
     const partyId = partyResult.insertId;
@@ -1931,10 +1949,10 @@ app.post('/api/register-president', upload.array('images'), async (req, res) => 
     // Insert leaders into the database
     for (let i = 0; i < leaders.length; i++) {
       const leader = leaders[i];
-      const image = files[i] ? files[i].path : null;
+      const leaderImage = leaderFiles[i] ? leaderFiles[i].path : null;  // Get the leader image path
       await db.query(
-        'INSERT INTO leaders (party_id, position, name, image) VALUES (?, ?, ?, ?)',
-        [partyId, leader.position, leader.name, image]
+        `INSERT INTO ${schemaName}.leaders (party_id, position, name, image) VALUES (?, ?, ?, ?)`,
+        [partyId, leader.position, leader.name, leaderImage]
       );
     }
 
@@ -1947,8 +1965,12 @@ app.post('/api/register-president', upload.array('images'), async (req, res) => 
 
 
 
+
 app.get('/api/party', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
+  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
 
   if (!token) {
     return res.status(401).json({ message: 'Authorization token is required' });
@@ -1961,7 +1983,7 @@ app.get('/api/party', async (req, res) => {
 
 
     const [partyDetails] = await db.query(
-      'SELECT * FROM parties WHERE president_id = ?',
+      `SELECT * FROM ${schemaName}.parties WHERE president_id = ?`,
       [presidentId]
     );
 
@@ -1970,7 +1992,7 @@ app.get('/api/party', async (req, res) => {
     }
 
     const [leaders] = await db.query(
-      'SELECT * FROM leaders WHERE party_id = ?',
+      `SELECT * FROM ${schemaName}.leaders WHERE party_id = ?`,
       [partyDetails[0].id]
     );
 
@@ -1982,6 +2004,20 @@ app.get('/api/party', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+app.get('/api/president-stats-votes', async (req, res) => {
+  try {
+    const [results] = await db.execute(`
+      SELECT party_id, COUNT(*) as vote_count 
+      FROM presidential_votes 
+      GROUP BY party_id
+    `);
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching votes' });
+  }
+});
+
 app.get('/candidate-status', async (req, res) => {
   const { email } = req.query;
   const year = new Date().getFullYear();
@@ -2037,10 +2073,7 @@ app.get('/api/candidate/:id', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const { admissionno } = userDetails[0]; // Use correct key from query result
-
-    console.log('Admission number:', admissionno);
-    // Use the admission number to find the candidate in the candidates table
+    const { admissionno } = userDetails[0]; 
     const [candidateDetails] = await db.query(
       `SELECT * FROM ${schemaName}.candidates WHERE admission_no = ?`,
       [admissionno]
@@ -2052,6 +2085,7 @@ app.get('/api/candidate/:id', async (req, res) => {
     }
 
     const candidate = candidateDetails[0];
+
 
     let performanceData = [];
     let otherCandidatesData = [];
@@ -2074,18 +2108,18 @@ app.get('/api/candidate/:id', async (req, res) => {
       );
     } else if (candidate.role === '1') {
       [performanceData] = await db.query(
-        'SELECT * FROM congressperson_votes WHERE leader_id = ?',
+        `SELECT * FROM ${schemaName}.congressperson_results WHERE leader_id = ?`,
         [candidate.id]
       );
       [otherCandidatesData] = await db.query(
-        'SELECT c.name, cv.vote_count FROM candidates c JOIN congressperson_votes cv ON c.id = cv.leader_id WHERE c.school_id = ? AND c.id != ?',
+        `SELECT c.name, cv.total_votes FROM candidates c JOIN ${schemaName}.congressperson_results cv ON c.id = cv.leader_id WHERE c.school_id = ? AND c.id != ?`,
         [candidate.school_id, candidate.id]
       );
     }
 
     // Determine if the candidate has won in their school
-    const totalVotes = performanceData.reduce((acc, data) => acc + data.vote_count, 0);
-    const maxVotes = Math.max(...performanceData.map(data => data.vote_count));
+    const totalVotes = performanceData.reduce((acc, data) => acc + data.total_votes, 0);
+    const maxVotes = Math.max(...performanceData.map(data => data.total_votes));
     if (totalVotes === maxVotes) {
       hasWon = true;
     }
@@ -2156,12 +2190,15 @@ app.get('/api/winners', async (req, res) => {
 });
 
 app.get('/api/all/presidential-candidates', async (req, res) => {
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
   try {
     const [presidentialCandidates] = await db.query(
       `SELECT p.id, p.party_name, p.motto, p.campaign_objectives, l.name AS president_name, s.name AS secretary_name
-       FROM parties p
-       JOIN leaders l ON p.id = l.party_id AND l.position = 'Secretary'
-       LEFT JOIN leaders s ON p.id = s.party_id AND s.position = 'Vice President'`
+       FROM ${schemaName}.parties p
+       JOIN  ${schemaName}.leaders l ON p.id = l.party_id AND l.position = 'Secretary'
+       LEFT JOIN  ${schemaName}.leaders s ON p.id = s.party_id AND s.position = 'Vice President'`
     );
     res.json(presidentialCandidates);
   } catch (error) {
@@ -2843,6 +2880,88 @@ app.get('/api/stats/campus-vote-stats/campus/:campusId', async (req, res) => {
 });
 
 
+app.get("/api/admin/users", async (req, res) => {
+  try {
+    const [users] = await db.query("SELECT * FROM users");
+    res.json(users);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Verify user
+app.put("/api/admin/users/verify/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.query("UPDATE users SET isVerified = '1' WHERE id = ?", [id]);
+    res.json({ message: "User verified successfully" });
+  } catch (error) {
+    console.error("Error verifying user:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
+app.put("/api/admin/users/disable/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { disabled } = req.body;  // Assuming you are sending "disabled" as a boolean
+
+    // Update the user's disabled status in the database
+    await db.query("UPDATE users SET status_disabled = ? WHERE id = ?", [disabled, id]);
+
+    // Fetch the user's email
+    const [user] = await db.query("SELECT email FROM users WHERE id = ?", [id]);
+
+    // Ensure user email is present
+    if (!user || !user[0].email) {
+      console.error("No email found for the user.");
+      return res.status(400).json({ message: "Email not found." });
+    }
+
+    const userEmail = user[0].email;  // Correctly accessing the email
+
+    console.log(userEmail);  // Log email to verify it's correct
+
+    // Set up email data using the transporter you already have
+    const mailOptions = {
+      from: 'mikekariuki10028@gmail.com',  // sender address (use your email here)
+      to: userEmail,                      // recipient's email (user's email)
+      subject: 'Your Account Has Been Disabled',  // email subject
+      text: `Dear User,
+
+Your account has been ${disabled ? 'disabled' : 'enabled'}.
+
+If this was a mistake, please contact support.
+
+Best regards,
+Your Team`, // plain text email body
+    };
+
+    // Send the email
+    await transporter.sendMail(mailOptions);
+
+    // Respond with a success message
+    res.json({ message: `User ${disabled ? "disabled" : "enabled"} successfully` });
+  } catch (error) {
+    console.error("Error updating user status:", error);
+    res.status(500).json({ message: "Error updating user status." });
+  }
+});
+
+// Delete user
+app.delete("/api/admin/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.query("DELETE FROM users WHERE id = ?", [id]);
+    res.json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 
