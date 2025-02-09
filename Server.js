@@ -2106,7 +2106,25 @@ app.get('/api/candidate/:id', async (req, res) => {
         'SELECT c.name, dv.vote_count FROM candidates c JOIN delegates_votes dv ON c.id = dv.leader_id WHERE c.school_id = ? AND c.id != ?',
         [candidate.school_id, candidate.id]
       );
-    } else if (candidate.role === '1') {
+      
+    }else if (candidate.congressperson_type) {
+      [performanceData] = await db.query(
+        `SELECT * FROM  ${schemaName}.full_votes WHERE candidate_id = ?`,
+        [candidate.id]
+      );
+      [otherCandidatesData] = await db.query(
+        `SELECT c.name, COUNT(dv.candidate_id) AS vote_count
+FROM candidates c
+JOIN evoting_2025.full_votes dv
+ON c.id = dv.candidate_id
+WHERE c.school_id = ? AND c.id != ?
+GROUP BY c.id
+`,
+        [candidate.school_id, candidate.id]
+      );
+      
+    }
+     else if (candidate.role === '1') {
       [performanceData] = await db.query(
         `SELECT * FROM ${schemaName}.congressperson_results WHERE leader_id = ?`,
         [candidate.id]
