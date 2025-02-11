@@ -101,6 +101,38 @@ app.get('/api/dashboard-stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch dashboard stats' });
   }
 });
+app.get('/api/presidential-votes-chart', async (req, res) => {
+  try {
+    const [voteCounts] = await db.query(`
+      SELECT p.party_name, COUNT(v.id) AS vote_count 
+      FROM presidential_votes v
+      JOIN parties p ON v.party_id = p.id
+      GROUP BY v.party_id, p.party_name
+      ORDER BY vote_count DESC
+    `);
+
+    res.json(voteCounts);
+  } catch (error) {
+    console.error('Error fetching presidential votes:', error);
+    res.status(500).json({ error: 'Failed to fetch vote data' });
+  }
+});
+// API endpoint to get gender distribution
+app.get('/api/gender-distribution', async (req, res) => {
+  try {
+    // Fetch the gender distribution
+    const [genderResult] = await db.query(`
+      SELECT gender, COUNT(*) AS count 
+      FROM users 
+      GROUP BY gender
+    `);
+
+    res.json(genderResult);
+  } catch (error) {
+    console.error('Error fetching gender distribution:', error);
+    res.status(500).json({ error: 'Failed to fetch gender distribution' });
+  }
+});
 
 
 
@@ -2062,6 +2094,7 @@ app.get('/api/candidate/:id', async (req, res) => {
   const year = new Date().getFullYear();
   const schemaName = `evoting_${year}`; // Dynamic schema name
 
+ 
   try {
     // Fetch the user's admission number using the provided user id
     const [userDetails] = await db.query(
@@ -2074,8 +2107,9 @@ app.get('/api/candidate/:id', async (req, res) => {
     }
 
     const { admissionno } = userDetails[0]; 
+    
     const [candidateDetails] = await db.query(
-      `SELECT * FROM ${schemaName}.candidates WHERE admission_no = ?`,
+      `SELECT * FROM ${schemaName}.candidates WHERE admission_no = ?  `,
       [admissionno]
     );
     
@@ -2108,29 +2142,35 @@ app.get('/api/candidate/:id', async (req, res) => {
       );
       
     }else if (candidate.congressperson_type) {
+      
       [performanceData] = await db.query(
         `SELECT * FROM  ${schemaName}.full_votes WHERE candidate_id = ?`,
         [candidate.id]
       );
+      
       [otherCandidatesData] = await db.query(
-        `SELECT c.name, COUNT(dv.candidate_id) AS vote_count
+        `SELECT c.name, COUNT(dv.candidate_id) AS total_votes
 FROM candidates c
-JOIN evoting_2025.full_votes dv
+JOIN ${schemaName}.full_votes dv
 ON c.id = dv.candidate_id
-WHERE c.school_id = ? AND c.id != ?
+WHERE c.congressperson_type = ? AND c.id != ?
 GROUP BY c.id
 `,
-        [candidate.school_id, candidate.id]
+        [candidate.congressperson_type, candidate.id]
       );
-      
+  
     }
      else if (candidate.role === '1') {
       [performanceData] = await db.query(
         `SELECT * FROM ${schemaName}.congressperson_results WHERE leader_id = ?`,
         [candidate.id]
       );
+   
       [otherCandidatesData] = await db.query(
-        `SELECT c.name, cv.total_votes FROM candidates c JOIN ${schemaName}.congressperson_results cv ON c.id = cv.leader_id WHERE c.school_id = ? AND c.id != ?`,
+        `SELECT c.name, cv.total_votes 
+        FROM candidates c JOIN ${schemaName}.congressperson_results cv
+         ON c.id = cv.leader_id 
+         WHERE c.school_id = ? AND c.id != ?`,
         [candidate.school_id, candidate.id]
       );
     }
