@@ -377,7 +377,7 @@ app.get('/protected-route', (req, res) => {
 
 const loginLimiter = rateLimit({
   windowMs: 3 * 60 * 1000, 
-  max: 5, 
+  max: 10, 
   message: 'Too many login attempts. Please try again later.',
 });
 
@@ -2144,13 +2144,15 @@ app.get('/api/candidate/:id', async (req, res) => {
     }else if (candidate.congressperson_type) {
       
       [performanceData] = await db.query(
-        `SELECT * FROM  ${schemaName}.full_votes WHERE candidate_id = ?`,
+        `SELECT COUNT(*) AS total_votes 
+   FROM ${schemaName}.full_votes 
+   WHERE candidate_id = ?`,
         [candidate.id]
       );
       
       [otherCandidatesData] = await db.query(
         `SELECT c.name, COUNT(dv.candidate_id) AS total_votes
-FROM candidates c
+FROM ${schemaName}.candidates c
 JOIN ${schemaName}.full_votes dv
 ON c.id = dv.candidate_id
 WHERE c.congressperson_type = ? AND c.id != ?
@@ -2160,7 +2162,7 @@ GROUP BY c.id
       );
   
     }
-     else if (candidate.role === '1') {
+     else if (candidate.congressperson_type === '1') {
       [performanceData] = await db.query(
         `SELECT * FROM ${schemaName}.congressperson_results WHERE leader_id = ?`,
         [candidate.id]
@@ -2181,6 +2183,7 @@ GROUP BY c.id
     if (totalVotes === maxVotes) {
       hasWon = true;
     }
+  
 
     res.json({ ...candidate, performanceData, otherCandidatesData, hasWon });
   } catch (error) {
@@ -2797,7 +2800,29 @@ app.get('/api/congressperson', async(req,res) => {
     console.error('Error')
     
   }
-} )
+} );
+app.get('/api/candidates/all', async (req, res) => {
+  const year = new Date().getFullYear();
+  const schemaName = `evoting_${year}`; // Dynamic schema name
+
+  try {
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+
+    const [candidates] = await db.query(`SELECT * FROM ${schemaName}.candidates`);
+ 
+    if (candidates.length === 0) {
+      return res.status(404).json({ message: 'No schools found' });
+    }
+    
+    res.json(candidates);
+  } catch (error) {
+    console.error('Error fetching schools:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 
 
 app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => {
@@ -2805,8 +2830,7 @@ app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => 
   const schemaName = `evoting_${year}`; // Dynamic schema name
 
   const { id } = req.params;
-  console.log('Received candidateType ID:', id);  // Debugging log
-
+ 
   const roleQuery = 'SELECT congressname FROM congresspersonroles WHERE id = ?';
   const voteQuery = `
   SELECT 
@@ -2831,26 +2855,20 @@ app.get('/api/admin/congressvote-stats/congressperson/:id', async (req, res) => 
 
 
   try {
-    console.log('Executing role query...');  // Debugging log
-
-    // Fetch the candidate type name
+   
     const [roleResults] = await db.query(roleQuery, [id]);
-    console.log('Role Query executed successfully, results:', roleResults);  // Debugging log
-
+   
     if (roleResults.length === 0) {
       console.warn('Candidate type not found for ID:', id);  // Debugging log
       return res.status(404).send({ message: 'Candidate type not found' });
     }
 
     const candidateTypeName = roleResults[0].congressname;
-    console.log('Candidate type name:', candidateTypeName);  // Debugging log
 
-    console.log('Executing vote query...');  // Debugging log
 
     // Fetch the vote statistics
     const [voteResults] = await db.query(voteQuery, [candidateTypeName]);
-    console.log('Vote Query executed successfully, results:', voteResults);  // Debugging log
-
+  
     res.json(voteResults);
 
   } catch (err) {
