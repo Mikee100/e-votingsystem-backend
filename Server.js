@@ -2141,7 +2141,28 @@ app.get('/api/candidate/:id', async (req, res) => {
         [candidate.school_id, candidate.id]
       );
       
-    }else if (candidate.congressperson_type) {
+    }  else if (candidate.congressperson_type === '1') {
+     
+      [performanceData] = await db.query(
+        `SELECT COUNT(*) AS total_votes 
+   FROM ${schemaName}.congressperson_results 
+   WHERE leader_id = ?`,
+        [candidate.id]
+      );
+      console.log('performanceData:', performanceData);
+   
+      [otherCandidatesData] = await db.query(
+        `SELECT c.name, COUNT(cv.leader_id) AS total_votes 
+         FROM ${schemaName}.candidates c 
+         JOIN ${schemaName}.congressperson_results cv 
+         ON c.id = cv.leader_id 
+         WHERE c.school_id = ? AND c.id != ?
+         GROUP BY c.id, c.name`,
+        [candidate.school_id, candidate.id]
+      );
+      
+    }
+    else if (candidate.congressperson_type) {
       
       [performanceData] = await db.query(
         `SELECT COUNT(*) AS total_votes 
@@ -2162,20 +2183,7 @@ GROUP BY c.id
       );
   
     }
-     else if (candidate.congressperson_type === '1') {
-      [performanceData] = await db.query(
-        `SELECT * FROM ${schemaName}.congressperson_results WHERE leader_id = ?`,
-        [candidate.id]
-      );
    
-      [otherCandidatesData] = await db.query(
-        `SELECT c.name, cv.total_votes 
-        FROM candidates c JOIN ${schemaName}.congressperson_results cv
-         ON c.id = cv.leader_id 
-         WHERE c.school_id = ? AND c.id != ?`,
-        [candidate.school_id, candidate.id]
-      );
-    }
 
     // Determine if the candidate has won in their school
     const totalVotes = performanceData.reduce((acc, data) => acc + data.total_votes, 0);
