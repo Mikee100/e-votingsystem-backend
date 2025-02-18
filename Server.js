@@ -439,13 +439,9 @@ app.get("/protected-route", (req, res) => {
   res.status(200).json({ message: "Welcome to the protected route" });
 });
 
-const loginLimiter = rateLimit({
-  windowMs: 3 * 60 * 1000,
-  max: 10,
-  message: "Too many login attempts. Please try again later.",
-});
 
-app.post("/login", loginLimiter, async (req, res) => {
+
+app.post("/login",async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -459,7 +455,7 @@ app.post("/login", loginLimiter, async (req, res) => {
 
     const existingUser = user[0];
 
-    // Check if the user is disabled
+    
     if (existingUser.status_disabled) {
       return res
         .status(403)
@@ -494,12 +490,14 @@ app.post("/login", loginLimiter, async (req, res) => {
 
     req.session.token = token;
     req.session.userId = existingUser.id;
-    req.session.role = existingUser.role;
+    req.session.role = existingUser.role; 
+    req.session.email = existingUser.email;
 
     return res.status(200).json({
       message: "Login successful",
       token: token,
       role: existingUser.role,
+      email: existingUser.email,
     });
   } catch (error) {
     console.error("Error during login:", error.message);
@@ -715,6 +713,60 @@ app.get("/userprofile", async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
+
+// Function to hash the email
+function HashedEmail(email) {
+  return crypto.createHash('sha256').update(email).digest('hex');
+}
+
+app.post('/api/vote', async (req, res) => {
+  const { email, candidateId, candidateType } = req.body;
+
+  if (!email || !candidateId || !candidateType) {
+    return res.status(400).json({ error: 'Email, Candidate ID, and Candidate Type are required' });
+  }
+
+  let schemaName;
+  try {
+     schemaName = await getCurrentSchema();
+    if (!schemaName) {
+      return res.status(500).send("Schema not configured");
+    }
+
+    // Your existing logic using schemaName
+  } catch (err) {
+    console.error("Error fetching schema:", err);
+    return res.status(500).send("Error fetching schema");
+  }
+
+  try {
+    const hashedEmail = HashedEmail(email); // Hash the email
+
+    // Check if the user has already voted for this candidate type
+    const [existingVote] = await db.execute(
+      `SELECT * FROM ${schemaName}.full_votes WHERE user_hash = ? AND candidate_type = ?`,
+      [hashedEmail, candidateType]
+    );
+
+    if (existingVote.length > 0) {
+      return res.status(400).json({ error: 'You have already voted for this type of candidate.' });
+    }
+
+    // Insert the vote using the hashed email
+    const query = `
+      INSERT INTO ${schemaName}.full_votes (user_hash, candidate_id, candidate_type) 
+      VALUES (?, ?, ?)
+    `;
+    await db.execute(query, [hashedEmail, candidateId, candidateType]);
+
+    res.status(200).json({ message: 'Vote cast successfully!' });
+  } catch (error) {
+    console.error('Error casting vote:', error.message);
+    res.status(500).json({ error: 'Failed to cast vote. Please try again later.' });
+  }
+});
+
+
 
 
 
@@ -1515,7 +1567,7 @@ app.post("/vote/congressperson", async (req, res) => {
     email,
     leaderId,
     schoolId,
-    year = new Date().getFullYear(),
+   
   } = req.body;
 
   try {
@@ -3361,32 +3413,32 @@ app.put("/api/admin/users/verify/:id", async (req, res) => {
 app.put("/api/admin/users/disable/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { disabled } = req.body; // Assuming you are sending "disabled" as a boolean
+    const { disabled } = req.body; 
 
-    // Update the user's disabled status in the database
+    
     await db.query("UPDATE users SET status_disabled = ? WHERE id = ?", [
       disabled,
       id,
     ]);
 
-    // Fetch the user's email
+    
     const [user] = await db.query("SELECT email FROM users WHERE id = ?", [id]);
 
-    // Ensure user email is present
+    
     if (!user || !user[0].email) {
       console.error("No email found for the user.");
       return res.status(400).json({ message: "Email not found." });
     }
 
-    const userEmail = user[0].email; // Correctly accessing the email
+    const userEmail = user[0].email; 
 
-    console.log(userEmail); // Log email to verify it's correct
+    
 
-    // Set up email data using the transporter you already have
+  
     const mailOptions = {
-      from: "mikekariuki10028@gmail.com", // sender address (use your email here)
-      to: userEmail, // recipient's email (user's email)
-      subject: "Your Account Has Been Disabled", // email subject
+      from: "mikekariuki10028@gmail.com", 
+      to: userEmail, 
+      subject: "Your Account Has Been Disabled",
       text: `Dear User,
 
 Your account has been ${disabled ? "disabled" : "enabled"}.
@@ -3394,13 +3446,13 @@ Your account has been ${disabled ? "disabled" : "enabled"}.
 If this was a mistake, please contact support.
 
 Best regards,
-Your Team`, // plain text email body
+Your Team`, 
     };
 
-    // Send the email
+  
     await transporter.sendMail(mailOptions);
 
-    // Respond with a success message
+   
     res.json({
       message: `User ${disabled ? "disabled" : "enabled"} successfully`,
     });
@@ -3410,7 +3462,7 @@ Your Team`, // plain text email body
   }
 });
 
-// Delete user
+
 app.delete("/api/admin/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -3423,7 +3475,7 @@ app.delete("/api/admin/users/:id", async (req, res) => {
 });
 
 
-// Get current schema year
+
 app.get("/api/getSchemaYear", async (req, res) => {
   try {
     const [result] = await db.execute("SELECT current_schema FROM settings LIMIT 1");
@@ -3438,7 +3490,7 @@ app.get("/api/getSchemaYear", async (req, res) => {
   }
 });
 
-// Update schema year
+
 app.post("/api/updateSchemaYear", async (req, res) => {
   let { schemaYear } = req.body;
 
@@ -3446,7 +3498,7 @@ app.post("/api/updateSchemaYear", async (req, res) => {
     return res.status(400).send("Invalid schema year");
   }
 
-  schemaYear = `evoting_${schemaYear}`; // Ensure the format
+  schemaYear = `evoting_${schemaYear}`; 
 
   try {
     await db.execute("UPDATE settings SET current_schema = ? LIMIT 1", [schemaYear]);
@@ -3485,7 +3537,6 @@ app.get("/api/getCongressResults", async (req, res) => {
              COALESCE(cr.total_votes, 0) AS total_votes
       FROM ${schemaName}.candidates c
       LEFT JOIN ${schemaName}.congressperson_results cr ON c.id = cr.leader_id
-      WHERE c.is_approved = 1
       ORDER BY c.school_id, cr.total_votes DESC
     `;
     const [candidates] = await db.execute(candidatesQuery);
@@ -3500,7 +3551,7 @@ app.get("/api/getCongressResults", async (req, res) => {
           candidate_id: c.candidate_id,
           candidate_name: c.candidate_name,
           total_votes: c.total_votes,
-          image: c.photo_path ? `http://localhost:3000/uploads/${c.photo_path}` : "/default-avatar.png",
+          image: c.photo_path 
         })),
     }));
 
