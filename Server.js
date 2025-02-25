@@ -80,6 +80,70 @@ let db;
   }
 })();
 
+app.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const [user] = await db.query("SELECT * FROM users WHERE email = ?", [email]);
+
+    if (user.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Generate a secure reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetTokenExpiry = Date.now() + 3600000; // Token expires in 1 hour
+
+    // Store token in database
+    await db.query("UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE email = ?", [resetToken, resetTokenExpiry, email]);
+
+    // Send email with the reset link
+    const resetLink = `http://localhost:5173/reset-password?token=${resetToken}`;
+    const mailOptions = {
+      from: "mikekariuki10028@gmail.com",
+      to: email,
+      subject: "Password Reset Request",
+      text: `Click the link to reset your password: ${resetLink}`,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "Password reset link sent!" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error. Try again later." });
+  }
+});
+
+app.post("/reset-password", async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    const [user] = await db.query("SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > ?", [token, Date.now()]);
+
+    if (user.length === 0) {
+      return res.status(400).json({ message: "Invalid or expired token" });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user password and clear token
+    await db.query("UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE reset_token = ?", [hashedPassword, token]);
+
+    res.json({ message: "Password reset successful!" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error. Try again later." });
+  }
+});
+app.get('/reset-password', (req, res) => {
+  res.send("Reset password page should be handled by the frontend.");
+});
+
+
+
 app.get("/api/dashboard-stats", async (req, res) => {
   let schemaName;
   try {
@@ -714,57 +778,6 @@ app.get("/userprofile", async (req, res) => {
   }
 });
 
-// Function to hash the email
-function HashedEmail(email) {
-  return crypto.createHash('sha256').update(email).digest('hex');
-}
-
-app.post('/api/vote', async (req, res) => {
-  const { email, candidateId, candidateType } = req.body;
-
-  if (!email || !candidateId || !candidateType) {
-    return res.status(400).json({ error: 'Email, Candidate ID, and Candidate Type are required' });
-  }
-
-  let schemaName;
-  try {
-     schemaName = await getCurrentSchema();
-    if (!schemaName) {
-      return res.status(500).send("Schema not configured");
-    }
-
-    // Your existing logic using schemaName
-  } catch (err) {
-    console.error("Error fetching schema:", err);
-    return res.status(500).send("Error fetching schema");
-  }
-
-  try {
-    const hashedEmail = HashedEmail(email); // Hash the email
-
-    // Check if the user has already voted for this candidate type
-    const [existingVote] = await db.execute(
-      `SELECT * FROM ${schemaName}.full_votes WHERE user_hash = ? AND candidate_type = ?`,
-      [hashedEmail, candidateType]
-    );
-
-    if (existingVote.length > 0) {
-      return res.status(400).json({ error: 'You have already voted for this type of candidate.' });
-    }
-
-    // Insert the vote using the hashed email
-    const query = `
-      INSERT INTO ${schemaName}.full_votes (user_hash, candidate_id, candidate_type) 
-      VALUES (?, ?, ?)
-    `;
-    await db.execute(query, [hashedEmail, candidateId, candidateType]);
-
-    res.status(200).json({ message: 'Vote cast successfully!' });
-  } catch (error) {
-    console.error('Error casting vote:', error.message);
-    res.status(500).json({ error: 'Failed to cast vote. Please try again later.' });
-  }
-});
 
 
 
@@ -987,8 +1000,7 @@ app.get("/api/fetchCandidatesByResidency", async (req, res) => {
     }
 
     const { residency_status, campus } = userData[0];
-    console.log("User residency status:", residency_status);
-    console.log("User campus ID:", campus);
+ 
 
     // Check if the user is from the main campus
     if (campus !== 1) {
@@ -1618,6 +1630,60 @@ app.post("/vote/congressperson", async (req, res) => {
       .json({ message: "Internal Server Error", error: err.message });
   }
 });
+// Function to hash the email
+function HashedEmail(email) {
+  return crypto.createHash('sha256').update(email).digest('hex');
+}
+
+
+app.post('/api/vote', async (req, res) => {
+  const { email, candidateId, candidateType } = req.body;
+
+  if (!email || !candidateId || !candidateType) {
+    return res.status(400).json({ error: 'Email, Candidate ID, and Candidate Type are required' });
+  }
+
+  let schemaName;
+  try {
+     schemaName = await getCurrentSchema();
+    if (!schemaName) {
+      return res.status(500).send("Schema not configured");
+    }
+
+    // Your existing logic using schemaName
+  } catch (err) {
+    console.error("Error fetching schema:", err);
+    return res.status(500).send("Error fetching schema");
+  }
+
+  try {
+    const hashedEmail = HashedEmail(email); // Hash the email
+
+    // Check if the user has already voted for this candidate type
+    const [existingVote] = await db.execute(
+      `SELECT * FROM ${schemaName}.full_votes WHERE user_hash = ? AND candidate_type = ?`,
+      [hashedEmail, candidateType]
+    );
+
+    if (existingVote.length > 0) {
+      return res.status(400).json({ error: 'You have already voted for this type of candidate.' });
+    }
+
+    // Insert the vote using the hashed email
+    const query = `
+      INSERT INTO ${schemaName}.full_votes (user_hash, candidate_id, candidate_type) 
+      VALUES (?, ?, ?)
+    `;
+    await db.execute(query, [hashedEmail, candidateId, candidateType]);
+
+    res.status(200).json({ message: 'Vote cast successfully!' });
+  } catch (error) {
+    console.error('Error casting vote:', error.message);
+    res.status(500).json({ error: 'Failed to cast vote. Please try again later.' });
+  }
+});
+
+
 
 app.post("/vote/delegate", async (req, res) => {
   const {
@@ -1663,7 +1729,7 @@ app.post("/vote/delegate", async (req, res) => {
       [schemaName, leaderId, schoolId, hashedEmail]
     );
 
-    res.json({ success: true, message: "Vote cast successfully!" });
+    res.status(200).json({ message: 'Vote cast successfully!' });
   } catch (err) {
     console.error("Error casting vote:", err); // Log error
     res
@@ -1716,7 +1782,7 @@ app.post("/vote/hostelrep", async (req, res) => {
       [schemaName, leaderId, schoolId, hashedEmail]
     );
 
-    res.json({ success: true, message: "Vote cast successfully!" });
+    res.status(200).json({ message: 'Vote cast successfully!' });
   } catch (err) {
     console.error("Error casting vote:", err); // Log error
     res
@@ -2272,9 +2338,18 @@ app.post(
     const { partyName, motto, campaignObjectives, leaders, email, password } =
       req.body;
     const files = req.files;
-    const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
-    const schemaName = `evoting_${year}`; // Dynamic schema name
-
+    let schemaName;
+    try {
+    schemaName = await getCurrentSchema();
+      if (!schemaName) {
+        return res.status(500).send("Schema not configured");
+      }
+  
+      // Your existing logic using schemaName
+    } catch (err) {
+      console.error("Error fetching schema:", err);
+      return res.status(500).send("Error fetching schema");
+    }
     // Assuming the first file is the party banner image and the rest are leaders' images
     const partyBannerFile = files[0]; // First file is the party banner
     const leaderFiles = files.slice(1); // The remaining files are the leaders' images
@@ -2324,9 +2399,18 @@ app.post(
 
 app.get("/api/party", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
-  const year = req.query.year || new Date().getFullYear(); // Extract year from query or use current year
-  const schemaName = `evoting_${year}`; // Dynamic schema name
+  let schemaName;
+  try {
+  schemaName = await getCurrentSchema();
+    if (!schemaName) {
+      return res.status(500).send("Schema not configured");
+    }
 
+    // Your existing logic using schemaName
+  } catch (err) {
+    console.error("Error fetching schema:", err);
+    return res.status(500).send("Error fetching schema");
+  }
   if (!token) {
     return res.status(401).json({ message: "Authorization token is required" });
   }
@@ -2358,10 +2442,22 @@ app.get("/api/party", async (req, res) => {
 });
 
 app.get("/api/president-stats-votes", async (req, res) => {
+  let schemaName;
+  try {
+  schemaName = await getCurrentSchema();
+    if (!schemaName) {
+      return res.status(500).send("Schema not configured");
+    }
+
+    // Your existing logic using schemaName
+  } catch (err) {
+    console.error("Error fetching schema:", err);
+    return res.status(500).send("Error fetching schema");
+  }
   try {
     const [results] = await db.execute(`
       SELECT party_id, COUNT(*) as vote_count 
-      FROM presidential_votes 
+      FROM ${schemaName}.presidential_votes 
       GROUP BY party_id
     `);
     res.json(results);
@@ -3560,6 +3656,60 @@ app.get("/api/getCongressResults", async (req, res) => {
     console.error("Error fetching congress results:", error);
     res.status(500).send("Error fetching congress results");
   }
+});
+
+
+// Get count of candidates by school
+app.get('/api/candidates-by-school', async (req, res) => {
+  try {
+    const query = `
+      SELECT s.schoolname, COUNT(c.id) as candidateCount 
+      FROM candidates c
+      LEFT JOIN schools s ON c.school_id = s.idschools
+      GROUP BY s.schoolname;
+    `;
+    const [rows] = await db.query(query);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching candidates by school:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.get('/api/user-schools', async (req, res) => {
+  try {
+    const query = `
+      SELECT s.schoolname AS school, COUNT(*) AS userCount 
+      FROM users u
+      JOIN schools s ON u.school = s.idschools
+      GROUP BY s.schoolname
+      ORDER BY userCount DESC;
+    `;
+    const [results] = await db.query(query);
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching user schools:', error);
+    res.status(500).json({ error: 'Failed to retrieve user schools data' });
+  }
+});
+
+app.get('/api/users-by-residency', async (req, res) => {
+  try {
+    const query = `
+      SELECT residency_status, COUNT(*) AS count 
+      FROM users 
+      GROUP BY residency_status;
+    `;
+    const [results] = await db.query(query);
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching users by residency:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date() });
 });
 
 
